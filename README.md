@@ -21,7 +21,6 @@ demonstrate:
 
 It may look like a Batcave project.
 
-It is actually a clean, interview-grade distributed system in disguise.
 
 ------------------------------------------------------------------------
 
