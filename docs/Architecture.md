@@ -241,3 +241,40 @@ That’s how the cave starts to “do” things — without coupling.
 ⚡ **Events move.**  
 🧠 **Alfred decides.**  
 💡 **Adapters act.**
+
+
+# Batcave-OS Architecture (Phase 1)
+
+## Core Idea
+Everything communicates through events.
+
+- Triggers publish requests
+- Services react and publish outcomes
+- Adapters execute intents (later)
+
+## Composition Root
+`apps/dev-runner` is the only place that wires the system together.
+
+It:
+- creates the bus
+- starts services (ex: Alfred Mode Engine)
+- attaches logging
+- (later) starts UI/voice endpoints
+
+Services do not import each other by file path.
+
+## Runtime Model (Phase 1)
+Single Node process.
+The bus is in-memory (no networking transport yet).
+All services subscribe inside the same process.
+
+## Mode Flow Example
+1. Dev Runner publishes `MODE.SET_REQUESTED`
+2. Bus delivers it to subscribers
+3. Alfred updates internal state
+4. Alfred publishes `MODE.CHANGED`
+5. Logger prints both
+
+Example observed output:
+- MODE.SET_REQUESTED (source=dev-runner)
+- MODE.CHANGED (source=alfred-mode-engine)

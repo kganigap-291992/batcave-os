@@ -1,0 +1,11 @@
+{
+  "name": "@batcave/alfred-mode-engine",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@batcave/gotham-bus": "workspace:*"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

@@ -15,6 +15,30 @@ importers:
         specifier: ^5.5.0
         version: 5.9.3
 
+  apps/dev-runner:
+    dependencies:
+      '@batcave/alfred-mode-engine':
+        specifier: workspace:*
+        version: link:../../services/alfred-mode-engine
+      '@batcave/gotham-bus':
+        specifier: workspace:*
+        version: link:../../services/gotham-bus
+    devDependencies:
+      tsx:
+        specifier: ^4.0.0
+        version: 4.21.0
+      typescript:
+        specifier: ^5.0.0
+        version: 5.9.3
+
+  services/alfred-mode-engine:
+    dependencies:
+      '@batcave/gotham-bus':
+        specifier: workspace:*
+        version: link:../gotham-bus
+
+  services/gotham-bus: {}
+
 packages:
 
   '@esbuild/aix-ppc64@0.27.3':

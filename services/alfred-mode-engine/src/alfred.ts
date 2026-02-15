@@ -1,5 +1,5 @@
-import type { Event, Mode } from "../../gotham-bus/src/events";
-import { GothamBus } from "../../gotham-bus/src/bus";
+import type { Event, Mode } from "@batcave/gotham-bus";
+import { GothamBus } from "@batcave/gotham-bus";
 
 export class AlfredModeEngine {
   private mode: Mode = "WORK";

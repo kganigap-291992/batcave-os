@@ -2,6 +2,9 @@
   "name": "batcave-os",
   "private": true,
   "packageManager": "pnpm@9.0.0",
+  "scripts": {
+    "dev": "pnpm -C apps/dev-runner dev"
+  },
   "devDependencies": {
     "tsx": "^4.19.0",
     "typescript": "^5.5.0"

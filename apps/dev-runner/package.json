@@ -1,0 +1,16 @@
+{
+  "name": "@batcave/dev-runner",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts"
+  },
+  "dependencies": {
+    "@batcave/gotham-bus": "workspace:*",
+    "@batcave/alfred-mode-engine": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}
