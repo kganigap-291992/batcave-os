@@ -55,6 +55,8 @@ Build a deterministic control loop capable of:
 -   Emitting state transition events
 -   Orchestrating device intent events
 -   Demonstrating full event propagation across services
+-   Accepting voice-issued commands as event producers
+
 
 Phase 1 focuses on architecture discipline --- not feature sprawl.
 
@@ -97,6 +99,42 @@ All state transitions emit events.
 This forms the first deterministic control loop.
 
 ------------------------------------------------------------------------
+
+
+## 🗣 Voice Control Integration
+
+Voice interaction is implemented as a first-class event producer.
+
+The system does not allow voice assistants to directly control hardware.
+
+Instead:
+
+    Voice Interface (Alexa / Assistant)
+            │
+            ▼
+     MODE.SET_REQUESTED Event
+            │
+            ▼
+       Gotham Bus
+            │
+            ▼
+     Alfred Mode Engine
+
+All voice-issued commands are normalized into domain events
+before entering the system.
+
+This preserves:
+
+- Deterministic behavior
+- Auditability
+- Architectural symmetry
+- Separation of concerns
+
+Voice is an input modality.
+Not a control authority.
+
+
+
 
 # 🧱 Core Services
 
