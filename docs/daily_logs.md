@@ -74,3 +74,67 @@ To:
         → MODE.SET_REJECTED
 
 Foundation for trace logging established.
+
+
+# 🦇 Batcave-OS
+## 📅 2026-02-18 — Event Contract Freeze + Intent Architecture (Day 3)
+
+---
+
+## 🎯 Objective
+
+Refactor the event system to support a canonical envelope and introduce an `INTENT` layer before connecting adapters.
+
+Today’s goals:
+
+- Freeze the event contract
+- Implement automatic metadata stamping in Gotham Bus
+- Introduce a voice-ready `INTENT` abstraction
+- Refactor Alfred mode engine to consume `INTENT`
+- Emit device intents on successful mode transitions
+- Verify full requestId propagation
+
+---
+
+## 🧠 Why This Refactor Was Necessary
+
+Previously:
+
+- Events were flat (`ts`, `source`, `requestId` at top level)
+- Dev-runner published `MODE.SET_REQUESTED`
+- Mode engine manually stamped metadata
+- No abstraction for voice/gesture inputs
+- No stable contract for adapters
+
+This would not scale once:
+
+- Voice adapter is introduced
+- Gesture control is added
+- Fake adapters are connected
+- Real hardware adapters are implemented
+
+We needed:
+
+- A canonical envelope
+- Automatic meta stamping
+- A decoupled command language
+- Deterministic request tracing
+
+---
+
+## 🏗 Canonical Event Envelope (v1)
+
+All events now follow this structure:
+
+```ts
+{
+  type: string,
+  payload: object,
+  meta: {
+    schema: "batcave.event.v1",
+    eventId: string,
+    requestId: string,
+    source: string,
+    ts: ISO-8601 string
+  }
+}
