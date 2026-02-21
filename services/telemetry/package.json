@@ -1,0 +1,20 @@
+{
+  "name": "@batcave/telemetry",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@batcave/gotham-bus": "workspace:*",
+    "@batcave/alfred-mode-engine": "workspace:*",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0",
+    "typescript": "^5.0.0"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "tsx src/server.ts"
+  }
+}

@@ -10,12 +10,8 @@ import { AlfredModeEngine } from "../../alfred-mode-engine/src/alfred";
 // -----------------------------
 // Helpers
 // -----------------------------
-function nowIso() {
-  return new Date().toISOString();
-}
-
 function newRequestId() {
-  return crypto.randomUUID();
+  return `req_${crypto.randomUUID()}`;
 }
 
 const ALL_MODES: readonly Mode[] = ["WORK", "DEFENSE", "NIGHT", "DEMO", "SILENT"] as const;
@@ -26,47 +22,11 @@ type RequestResult =
 
 // Local validation: DO NOT publish on failure
 function validateRequestedMode(mode: any) {
-  if (!mode) {
-    return { ok: false as const, reason: "Missing mode" };
-  }
+  if (!mode) return { ok: false as const, reason: "Missing mode" };
   if (!ALL_MODES.includes(mode)) {
     return { ok: false as const, reason: `Unknown mode: ${String(mode)}` };
   }
   return { ok: true as const };
-}
-
-function makeRejected(params: {
-  requestId: string;
-  requestedMode: Mode;
-  reasonCode: ModeRejectCode;
-  reason: string;
-  currentMode?: Mode | null;
-  source?: string;
-}): Extract<Event, { type: "MODE.SET_REJECTED" }> {
-  return {
-    type: "MODE.SET_REJECTED",
-    ts: nowIso(),
-    source: params.source ?? "dev-runner",
-    requestId: params.requestId,
-    requestedMode: params.requestedMode,
-    reasonCode: params.reasonCode,
-    reason: params.reason,
-    currentMode: params.currentMode ?? null,
-  };
-}
-
-function makeRequested(params: {
-  requestId: string;
-  requestedMode: Mode;
-  source?: string;
-}): Extract<Event, { type: "MODE.SET_REQUESTED" }> {
-  return {
-    type: "MODE.SET_REQUESTED",
-    ts: nowIso(),
-    source: params.source ?? "dev-runner",
-    requestId: params.requestId,
-    mode: params.requestedMode,
-  };
 }
 
 // -----------------------------
@@ -78,19 +38,35 @@ async function requestModeChange(
   timeoutMs = 1500
 ): Promise<RequestResult> {
   const requestId = newRequestId();
+  const traceId = requestId; // Day 1 simple rule: traceId = requestId on chain start
+  const source = "dev-runner";
 
   // ✅ Local validation: return a rejection-like object, but DO NOT publish
   const v = validateRequestedMode(requestedMode);
   if (!v.ok) {
-    const localRejected = makeRejected({
-      requestId,
-      requestedMode: "WORK", // fallback required by type; not used by caller much
-      reasonCode: "VALIDATION_ERROR",
-      reason: v.reason,
-      currentMode: null,
-      source: "dev-runner",
-    });
-    return { ok: false, event: localRejected };
+    // Return a "rejection-like" event shape for caller convenience, but not published.
+    // NOTE: this is NOT a real bus Event envelope; caller just prints it.
+    const localRejected = {
+      type: "MODE.SET_REJECTED" as const,
+      payload: {
+        requestedMode: "WORK" as Mode, // fallback for typing; not meaningful
+        reasonCode: "VALIDATION_ERROR" as ModeRejectCode,
+        reason: v.reason,
+        currentMode: null as Mode | null,
+      },
+      meta: {
+        schema: "batcave.event.v1" as const,
+        eventId: `evt_local_${crypto.randomUUID()}`,
+        requestId,
+        traceId,
+        category: "decision" as const,
+        severity: "error" as const,
+        source,
+        ts: new Date().toISOString(),
+      },
+    };
+
+    return { ok: false, event: localRejected as any };
   }
 
   const mode = requestedMode as Mode;
@@ -101,24 +77,46 @@ async function requestModeChange(
     const unsubscribe = bus.subscribe((e: Event) => {
       if (done) return;
 
-      // Wait for either CHANGED or SET_REJECTED with matching requestId
-      if (e.type === "MODE.CHANGED" && e.requestId === requestId) {
+      // Match on requestId (all downstream events should keep the same requestId)
+      if (e.meta.requestId !== requestId) return;
+
+      if (e.type === "MODE.CHANGED") {
         done = true;
         unsubscribe();
-        resolve({ ok: true, event: e });
+        resolve({ ok: true, event: e as Extract<Event, { type: "MODE.CHANGED" }> });
         return;
       }
 
-      if (e.type === "MODE.SET_REJECTED" && e.requestId === requestId) {
+      if (e.type === "MODE.SET_REJECTED") {
         done = true;
         unsubscribe();
-        resolve({ ok: false, event: e });
+        resolve({ ok: false, event: e as Extract<Event, { type: "MODE.SET_REJECTED" }> });
         return;
       }
     });
 
-    // Publish the request
-    bus.publish(makeRequested({ requestId, requestedMode: mode, source: "dev-runner" }));
+    // 1) Publish INTENT (command) — shows up in logs/UI as the initiating action
+    const intent = bus.publish(
+      {
+        type: "INTENT",
+        payload: { intent: "MODE.SET", mode },
+      } as any,
+      { source, requestId, traceId }
+    );
+
+    // 2) Translate intent -> decision request (same requestId/traceId to keep one trace chain)
+    bus.publish(
+      {
+        type: "MODE.SET_REQUESTED",
+        payload: { mode },
+        meta: {
+          requestId: intent.meta.requestId,
+          traceId: intent.meta.traceId,
+          source: intent.meta.source,
+        },
+      } as any,
+      { source, requestId, traceId }
+    );
 
     // Timeout => ENGINE_OFFLINE (published)
     setTimeout(() => {
@@ -126,19 +124,21 @@ async function requestModeChange(
       done = true;
       unsubscribe();
 
-      const offline = makeRejected({
-        requestId,
-        requestedMode: mode,
-        reasonCode: "ENGINE_OFFLINE",
-        reason: `No response within ${timeoutMs}ms`,
-        currentMode: null,
-        source: "dev-runner",
-      });
+      const offline = bus.publish(
+        {
+          type: "MODE.SET_REJECTED",
+          payload: {
+            requestedMode: mode,
+            reasonCode: "ENGINE_OFFLINE",
+            reason: `No response within ${timeoutMs}ms`,
+            currentMode: null,
+          },
+          meta: { requestId, traceId, source },
+        } as any,
+        { source, requestId, traceId }
+      );
 
-      // ✅ For offline fallback, we DO publish (by design)
-      bus.publish(offline);
-
-      resolve({ ok: false, event: offline });
+      resolve({ ok: false, event: offline as Extract<Event, { type: "MODE.SET_REJECTED" }> });
     }, timeoutMs);
   });
 }
@@ -155,7 +155,11 @@ async function main() {
 
   // Optional: print all bus traffic so you can SEE the system in action
   bus.subscribe((e: Event) => {
-    console.log(`[BUS] ${e.type}`, e);
+    // Keep logs consistent with the new envelope
+    console.log(
+      `[BUS] ${e.type} ${e.meta.category}/${e.meta.severity} req=${e.meta.requestId} trace=${e.meta.traceId}`,
+      e
+    );
   });
 
   // 1) Valid change => MODE.CHANGED

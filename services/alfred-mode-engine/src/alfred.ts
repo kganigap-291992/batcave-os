@@ -20,14 +20,13 @@ export class AlfredModeEngine {
   constructor(private bus: GothamBus) {}
 
   start() {
-    // Listen for voice/dev-runner style commands:
-    // { type:"INTENT", intent:"MODE.SET", payload:{mode:"WORK"}, meta:{...} }
-    this.bus.subscribeType("INTENT", (e) => {
-      // Narrow to MODE.SET
-      if (e.intent !== "MODE.SET") return;
+    // ✅ Option A: Alfred listens ONLY to MODE.SET_REQUESTED
+    this.bus.subscribeType("MODE.SET_REQUESTED", (e) => {
+      const requested = e.payload.mode as Mode | undefined;
 
-      const rid = e.meta.requestId;
-      const requested = e.payload.mode as Mode;
+      const requestId = e.meta.requestId;
+      const traceId = e.meta.traceId;
+      const source = "alfred-mode-engine";
 
       const current = this.mode;
 
@@ -42,8 +41,8 @@ export class AlfredModeEngine {
               reason: "Missing mode in request",
               currentMode: current ?? null,
             },
-          },
-          { source: "alfred-mode-engine", requestId: rid }
+            meta: { requestId, traceId, source },
+          } as any
         );
         return;
       }
@@ -59,8 +58,8 @@ export class AlfredModeEngine {
               reason: `Already in mode ${current}`,
               currentMode: current ?? null,
             },
-          },
-          { source: "alfred-mode-engine", requestId: rid }
+            meta: { requestId, traceId, source },
+          } as any
         );
         return;
       }
@@ -77,11 +76,23 @@ export class AlfredModeEngine {
               reason: `Transition not allowed: ${current} → ${requested}`,
               currentMode: current ?? null,
             },
-          },
-          { source: "alfred-mode-engine", requestId: rid }
+            meta: { requestId, traceId, source },
+          } as any
         );
         return;
       }
+
+      // ✅ Day 1: emit accepted first
+      this.bus.publish(
+        {
+          type: "MODE.SET_ACCEPTED",
+          payload: {
+            requestedMode: requested,
+            currentMode: current ?? null,
+          },
+          meta: { requestId, traceId, source },
+        } as any
+      );
 
       // Apply transition
       const prev = this.mode;
@@ -92,78 +103,14 @@ export class AlfredModeEngine {
         {
           type: "MODE.CHANGED",
           payload: { mode: this.mode, prevMode: prev ?? null },
-        },
-        { source: "alfred-mode-engine", requestId: rid }
+          meta: { requestId, traceId, source },
+        } as any
       );
 
-      // Day 3: Emit device intents based on new mode
-      this.emitModeIntents(this.mode, rid);
+      // 🚫 Phase 1 discipline (Day 1/2): no device intents yet.
+      // Day 3 will re-enable this behind a flag.
+      // this.emitModeIntents(this.mode, requestId, traceId);
     });
-  }
-
-  private emitModeIntents(mode: Mode, requestId: string) {
-    switch (mode) {
-      case "WORK": {
-        this.bus.publish(
-          { type: "INTENT", intent: "LIGHT.SET", payload: { scene: "WORK", brightness: 90 } },
-          { source: "alfred-mode-engine", requestId }
-        );
-        this.bus.publish(
-          { type: "INTENT", intent: "PLUG.SET", payload: { on: true } },
-          { source: "alfred-mode-engine", requestId }
-        );
-        return;
-      }
-
-      case "DEFENSE": {
-        this.bus.publish(
-          {
-            type: "INTENT",
-            intent: "LIGHT.SET",
-            payload: { scene: "DEFENSE", color: "red", brightness: 80 },
-          },
-          { source: "alfred-mode-engine", requestId }
-        );
-        this.bus.publish(
-          { type: "INTENT", intent: "PLUG.SET", payload: { on: true } },
-          { source: "alfred-mode-engine", requestId }
-        );
-        return;
-      }
-
-      case "NIGHT":
-      case "SILENT": {
-        this.bus.publish(
-          {
-            type: "INTENT",
-            intent: "LIGHT.SET",
-            payload: { scene: mode, brightness: 10 },
-          },
-          { source: "alfred-mode-engine", requestId }
-        );
-        this.bus.publish(
-          { type: "INTENT", intent: "PLUG.SET", payload: { on: false } },
-          { source: "alfred-mode-engine", requestId }
-        );
-        return;
-      }
-
-      case "DEMO": {
-        this.bus.publish(
-          {
-            type: "INTENT",
-            intent: "LIGHT.SET",
-            payload: { scene: "DEMO", brightness: 100 },
-          },
-          { source: "alfred-mode-engine", requestId }
-        );
-        this.bus.publish(
-          { type: "INTENT", intent: "PLUG.SET", payload: { on: true } },
-          { source: "alfred-mode-engine", requestId }
-        );
-        return;
-      }
-    }
   }
 
   getMode() {

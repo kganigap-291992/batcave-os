@@ -138,3 +138,200 @@ All events now follow this structure:
     ts: ISO-8601 string
   }
 }
+```
+
+**Date:** February 21, 2026
+**Phase:** Phase 1 --- Deterministic Control + Observability Spine
+
+# 🎯 Objective of Today
+
+Lock the **Backend Truth Layer** and build a proper **Telemetry
+foundation** before building any UI or hardware integrations.
+
+No animations.\
+No device adapters.\
+No UI polish.\
+Only deterministic structured events + persistence.
+
+------------------------------------------------------------------------
+
+# ✅ Completed
+
+## 1️⃣ Canonical Event Envelope (v1)
+
+All events now conform to:
+
+``` ts
+{
+  type: string,
+  payload: object,
+  meta: {
+    schema: "batcave.event.v1",
+    eventId: string,
+    seq: number,
+    traceId: string,
+    requestId: string,
+    category: "intent" | "decision" | "device" | "vision" | "system",
+    severity: "debug" | "info" | "warn" | "error",
+    source: string,
+    ts: ISO-8601 string
+  }
+}
+```
+
+### Why this matters
+
+-   Deterministic ordering
+-   Trace correlation
+-   UI-ready structured logs
+-   Persistable event truth
+
+------------------------------------------------------------------------
+
+## 2️⃣ Deterministic Ordering via `meta.seq`
+
+Problem: Console logs appeared out of order due to identical timestamps.
+
+Solution: Added monotonic `seq` counter inside `GothamBus.publish()`.
+
+Result: All traces can be sorted deterministically using `meta.seq`.
+
+------------------------------------------------------------------------
+
+## 3️⃣ Alfred Engine (Decision Engine) Refactor
+
+Old issue: Alfred was listening to `INTENT`, causing race ordering
+issues.
+
+New architecture (Option A locked):
+
+-   `INTENT` → Command visibility
+-   `MODE.SET_REQUESTED` → Decision input
+-   Alfred listens ONLY to `MODE.SET_REQUESTED`
+
+Alfred now emits: - `MODE.SET_ACCEPTED` - `MODE.SET_REJECTED` -
+`MODE.CHANGED`
+
+All preserve: - `traceId` - `requestId` - correct `category` - correct
+`severity`
+
+------------------------------------------------------------------------
+
+## 4️⃣ Telemetry Service Built
+
+Created:
+
+    services/telemetry/
+
+Capabilities:
+
+-   Subscribes to all bus events
+-   Ring buffer (size 500)
+-   JSONL persistence
+-   HTTP API
+
+### Endpoints
+
+-   `GET /events?limit=...`
+-   `GET /trace/:traceId`
+-   `GET /events/stream` (SSE-ready)
+
+### Verified
+
+-   Telemetry runs at `http://localhost:8790`
+-   `/events` returns sorted events
+-   `/trace/:id` returns deterministic chain
+-   JSONL file appends correctly
+
+------------------------------------------------------------------------
+
+## 5️⃣ Temporary Debug Trigger
+
+Added:
+
+    POST /debug/mode/:mode
+
+Publishes: - `INTENT` - `MODE.SET_REQUESTED`
+
+Used to validate full pipeline before UI exists.
+
+------------------------------------------------------------------------
+
+# 🧠 Current System State
+
+## Working
+
+-   Deterministic event bus
+-   Structured envelope
+-   Decision chain integrity
+-   Telemetry persistence
+-   Trace endpoint
+-   Debug trigger
+
+## Not Yet Built
+
+-   UI (Signal Log HUD)
+-   Trace drawer
+-   Health indicators
+-   Device adapters
+-   Voice adapter
+-   Gesture adapter
+
+------------------------------------------------------------------------
+
+# 🔜 Next Steps
+
+## Phase 1 --- Day 1 Step 4
+
+### Build `apps/batconsole-ui`
+
+Goals: - Fetch `/events?limit=200` - Render structured rows - Color by
+category - Highlight severity = error - Polling first (SSE later) - No
+animations yet
+
+------------------------------------------------------------------------
+
+## Telemetry Wiring Plan
+
+Current state: Telemetry runs in-process with its own bus.
+
+Next improvement (after UI works): - Unify bus instance across
+services - Remove debug endpoint - Connect real producers (dev-runner /
+voice / gesture) - Keep telemetry as read-only observer
+
+------------------------------------------------------------------------
+
+## When to Connect Adapters
+
+Adapters come AFTER:
+
+1.  UI log panel works
+2.  Trace drawer works (Day 2)
+3.  Health indicators implemented
+
+Order:
+
+1️⃣ FakeLightAdapter\
+2️⃣ Real Govee Adapter\
+3️⃣ Voice Adapter (Alexa)\
+4️⃣ Gesture Adapter\
+5️⃣ Reactor visuals refinement
+
+Adapters should never be connected before observability is stable.
+
+------------------------------------------------------------------------
+
+# 🏁 Definition of Phase 1 Completion
+
+-   Deterministic event system
+-   Live structured logs UI
+-   Clickable trace debugging
+-   Health diagnostics
+-   FakeLight + Real Govee integration
+-   Voice integration
+-   Stable demo flow
+
+------------------------------------------------------------------------
+
+**Phase 1 Principle:**\
+Truth → Observability → Control → Devices → Cinematic polish
