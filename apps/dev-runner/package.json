@@ -6,8 +6,10 @@
     "dev": "tsx watch src/main.ts"
   },
   "dependencies": {
+    "@batcave/alfred-mode-engine": "workspace:*",
     "@batcave/gotham-bus": "workspace:*",
-    "@batcave/alfred-mode-engine": "workspace:*"
+    "@batcave/telemetry": "workspace:^",
+    "express": "^4.19.2"
   },
   "devDependencies": {
     "tsx": "^4.0.0",

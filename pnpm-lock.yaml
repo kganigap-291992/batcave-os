@@ -23,6 +23,12 @@ importers:
       '@batcave/gotham-bus':
         specifier: workspace:*
         version: link:../../services/gotham-bus
+      '@batcave/telemetry':
+        specifier: workspace:^
+        version: link:../../services/telemetry
+      express:
+        specifier: ^4.19.2
+        version: 4.22.1
     devDependencies:
       tsx:
         specifier: ^4.0.0

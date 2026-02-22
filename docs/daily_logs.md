@@ -261,22 +261,14 @@ Used to validate full pipeline before UI exists.
 
 ## Working
 
--   Deterministic event bus
--   Structured envelope
--   Decision chain integrity
--   Telemetry persistence
--   Trace endpoint
--   Debug trigger
+-   Structured event observability
+-   Persistent event logging
+-   Service health monitoring
+-   Trace diagnostics with latency tracking
+-   Mini-ELK style indexing
+-   Deterministic debugging surface
 
-## Not Yet Built
-
--   UI (Signal Log HUD)
--   Trace drawer
--   Health indicators
--   Device adapters
--   Voice adapter
--   Gesture adapter
-
+This is the operational backbone of Batcave Phase 1.
 ------------------------------------------------------------------------
 
 # 🔜 Next Steps
