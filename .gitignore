@@ -4,3 +4,4 @@ build
 .env
 # Local runtime state
 **/local/
+services/telemetry/local/logs/

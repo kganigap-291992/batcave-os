@@ -1,280 +1,254 @@
-# 🦇 Batcave-OS — Architecture (Simple + Visual)
+# 🦇 Batcave-OS --- Architecture
 
-This document explains Batcave-OS in **plain language** with **diagrams**.
+This document explains Batcave-OS in plain language with diagrams. It
+reflects the locked Phase 1 and Phase 2 roadmap.
 
-> **Everything talks by events.**  
-> Producers publish. Consumers react. Nobody calls each other directly.
+Everything communicates through events. Producers publish. Consumers
+react. Nobody calls each other directly.
 
----
+------------------------------------------------------------------------
 
-## 1) Mental Model
+## 1) Mental Model --- The Room
 
-### 🏟 The “Room” analogy
+-   Gotham Bus = the room's speaker system
+-   Events = things shouted into the room
+-   Services / Adapters = people who listen and react
 
-- **Gotham Bus** = the room’s speaker system  
-- **Events** = the things shouted into the room  
-- **Services/Adapters** = people in the room who *listen* and *react*
+If nobody listens, nothing happens. If many listen, they react
+independently.
 
-If nobody is listening, nothing happens.  
-If many are listening, they can all react **independently**.
+------------------------------------------------------------------------
 
----
+## 2) High-Level Architecture
 
-## 2) The Big Picture Diagram
-
-```
-                (UI / Triggers)
-     Dashboard / Voice / Gesture / Dev
-                 │   publish events
-                 ▼
-            ┌───────────┐
-            │ Gotham Bus │   (pub/sub transport)
-            └─────┬─────┘
-                  │ delivers events
+    Inputs (UI / Voice / Demo / Sensors / Vision)
+                  │
                   ▼
-        ┌─────────────────────┐
-        │ Alfred Mode Engine   │  (state machine brain)
-        └─────┬───────────────┘
-              │ publishes MODE.CHANGED
-              ▼
-   ┌───────────────────┐   ┌───────────────────┐
-   │ Integrations       │   │ Apps / Logging     │
-   │ (Govee, Plug, etc)│   │ (Dashboard, logs)  │
-   └─────────┬─────────┘   └───────────────────┘
-             │
-             ▼
-        Hardware / Devices
-```
+             Gotham Bus
+                  │
+                  ▼
+         Alfred Orchestrator
+       (Modes + Alerts + FSM)
+                  │
+                  ▼
+       Facts + Decisions Emitted
+                  │
+                  ▼
+     UI / Adapters / Telemetry
 
-**Rule:** Integrations touch hardware.  
-**Rule:** Alfred decides modes.  
-**Rule:** The bus only transports events.
+Rules: - Bus only transports - Alfred decides - Adapters execute - UI
+renders - Telemetry observes
 
----
+------------------------------------------------------------------------
 
-## 3) Current Implementation Flow (What Works Today)
+## 3) Core Execution Loop
 
-✅ Implemented right now:
+    COMMAND / SENSOR / DEMO
+            ↓
+        Gotham Bus
+            ↓
+     Alfred (Decision + Alert Manager)
+            ↓
+     MODE.CHANGED / ALERT.* / DEVICE.*
+            ↓
+        Gotham Bus
+            ↓
+     UI / Devices / Logs
 
-- `MODE.SET_REQUESTED` → Alfred reacts → `MODE.CHANGED`
+This loop is deterministic and replayable.
 
-### Sequence Diagram (Simple)
+------------------------------------------------------------------------
 
-```
-dev.ts            Gotham Bus            Alfred
-  |                  |                    |
-  | publish SET      |                    |
-  |----------------->|                    |
-  |                  | deliver SET        |
-  |                  |------------------->|
-  |                  |                    | update internal mode
-  |                  |                    | publish CHANGED
-  |                  |<-------------------|
-  | deliver CHANGED  |                    |
-  |<-----------------|                    |
-  | console prints   |                    |
-```
+## 4) Base Modes (Phase 1+)
 
-### Quick “State Change” view
+Batcave operates on three base modes:
 
-```
-Current mode: WORK
-Event: MODE.SET_REQUESTED(DEMO)
-Alfred updates: WORK -> DEMO
-Alfred publishes: MODE.CHANGED(prev=WORK, mode=DEMO)
-```
+  Mode      Meaning
+  --------- ---------------------
+  STANDBY   Idle / Locked
+  WORK      Active / Focus
+  NIGHT     Low-power / Ambient
 
----
+Only Alfred may change modes.
 
-## 4) Event Types (The Language)
+All transitions emit MODE.CHANGED.
 
-Events are the **shared vocabulary** of the entire system.
+------------------------------------------------------------------------
 
-### Current Contract
+## 5) Alert Overlay System
 
-- `MODE.SET_REQUESTED` — request a mode change
-- `MODE.CHANGED` — announce the mode actually changed
+Alerts are temporary overlays layered on top of base modes.
 
-Modes:
+They are not modes.
 
-- `WORK`, `DEFENSE`, `NIGHT`, `DEMO`, `SILENT`
+### Trigger Sources
 
-### Event Examples
+1)  Internal Health
+    -   BUS.UNHEALTHY
+    -   TELEMETRY.ERROR
+    -   ADAPTER.DOWN
+2)  Sensors
+    -   PRESENCE.\*
+    -   ENV.\*
+3)  Demo Injection
+    -   DEMO.EVENT
 
-**Request:**
-```json
-{
-  "type": "MODE.SET_REQUESTED",
-  "ts": "2026-02-14T16:36:18.109Z",
-  "source": "dev",
-  "mode": "DEMO"
-}
-```
+### Alert Flow
 
-**State transition announcement:**
-```json
-{
-  "type": "MODE.CHANGED",
-  "ts": "2026-02-14T16:36:18.114Z",
-  "source": "alfred-mode-engine",
-  "mode": "DEMO",
-  "prevMode": "WORK"
-}
-```
+    Trigger Event
+         ↓
+     Alfred Alert Manager
+         ↓
+     ALERT.RAISED
+         ↓
+     UI / Devices
+         ↓
+     TTL expires
+         ↓
+     ALERT.CLEARED
 
----
+Default TTL: 10 seconds (extendable).
 
-## 5) What Each Component Is Allowed To Do
+------------------------------------------------------------------------
 
-### Gotham Bus (Transport Only)
-✅ Allowed:
-- publish / subscribe
-- deliver events
+## 6) Component Responsibilities
 
-❌ Not allowed:
-- decide modes
-- talk to hardware
-- enforce behavior
+### Gotham Bus (Transport)
 
----
+Allowed: - publish - subscribe - order via seq
 
-### Alfred Mode Engine (Brain / State Machine)
-✅ Allowed:
-- store current mode
-- react to `MODE.SET_REQUESTED`
-- publish `MODE.CHANGED`
+Not allowed: - decisions - hardware calls - state
 
-❌ Not allowed:
-- call Govee API directly
-- call Smart Plug API directly
-- contain UI code
+------------------------------------------------------------------------
 
----
+### Alfred Orchestrator (Brain)
 
-### Integrations (Adapters / Hands)
-✅ Allowed:
-- listen to bus events
-- talk to hardware APIs
-- translate events → device commands
+Allowed: - FSM enforcement - command arbitration - alert management -
+device intent emission
 
-❌ Not allowed:
-- decide what mode should be
-- implement orchestration rules
+Not allowed: - direct hardware access - UI logic
 
----
+------------------------------------------------------------------------
 
-### Apps (UI / Eyes)
-✅ Allowed:
-- display current mode and events
-- publish requests (like mode changes)
+### Adapters (Hands)
 
-❌ Not allowed:
-- contain mode decision logic
-- call hardware APIs
+Allowed: - talk to device APIs - translate intents - publish status
 
----
+Not allowed: - orchestration - state authority
 
-## 6) Mode Meaning (Simple)
+------------------------------------------------------------------------
 
-| Mode   | Meaning |
-|--------|---------|
-| WORK   | Default operational state |
-| DEFENSE| Alert mode |
-| NIGHT  | Low-power / dim |
-| DEMO   | Cinematic showcase |
-| SILENT | System remains operational but suppresses visible or audible outputs (Do Not Disturb) |
+### UI (Eyes)
 
-Important: **SILENT is not OFF.**  
-It means “run quietly.”
+Allowed: - render modes - render alerts - render logs - publish requests
 
----
+Not allowed: - business logic - hardware control
 
-## 7) Flowchart (Easy Rules)
+------------------------------------------------------------------------
 
-```mermaid
-flowchart TD
-  A[Producer publishes MODE.SET_REQUESTED] --> B[Gotham Bus]
-  B --> C[Alfred Mode Engine receives event]
-  C --> D{Is event MODE.SET_REQUESTED?}
-  D -- No --> E[Ignore]
-  D -- Yes --> F[Update internal mode]
-  F --> G[Publish MODE.CHANGED]
-  G --> B
-  B --> H[All subscribers receive MODE.CHANGED]
-```
+### Telemetry (Memory)
 
----
+Allowed: - subscribe to all events - persist logs - expose APIs
 
-## 8) Repo Structure (Minimal)
+Not allowed: - influence decisions
 
-```
-batcave-os/
-├─ apps/
-│  └─ batcomputer-dashboard/      (UI)
-├─ services/
-│  ├─ gotham-bus/                 (pub/sub transport)
-│  └─ alfred-mode-engine/         (state machine brain)
-├─ integrations/
-│  └─ govee-lights/               (hardware adapter)
-└─ docs/
-   └─ ARCHITECTURE.md             (this file)
-```
+------------------------------------------------------------------------
 
----
+## 7) Event Language
 
-## 9) What’s Next (Natural Next Steps)
+All components communicate using the canonical envelope.
 
-The next “real” expansion is to have integrations react to `MODE.CHANGED`:
+Key categories:
 
-```
-MODE.CHANGED
-   ├─> govee-lights adapter sets scene/color
-   ├─> smart-plug adapter toggles power (later)
-   └─> dashboard displays mode + event log
-```
+-   intent
+-   decision
+-   device
+-   vision
+-   system
 
-That’s how the cave starts to “do” things — without coupling.
+See: docs/event-contract-v2.md
 
----
+------------------------------------------------------------------------
 
-🦇 **The cave listens.**  
-⚡ **Events move.**  
-🧠 **Alfred decides.**  
-💡 **Adapters act.**
+## 8) Runtime Model (Phase 1)
 
+-   Single-node runtime
+-   In-memory bus
+-   In-process services
+-   File + HTTP telemetry
 
-# Batcave-OS Architecture (Phase 1)
+This enables fast iteration and debugging.
 
-## Core Idea
-Everything communicates through events.
+------------------------------------------------------------------------
 
-- Triggers publish requests
-- Services react and publish outcomes
-- Adapters execute intents (later)
+## 9) Phase 2 --- Gesture & Vision Layer
 
-## Composition Root
-`apps/dev-runner` is the only place that wires the system together.
+Phase 2 adds human interaction.
 
-It:
-- creates the bus
-- starts services (ex: Alfred Mode Engine)
-- attaches logging
-- (later) starts UI/voice endpoints
+### Vision Adapter
 
-Services do not import each other by file path.
+-   Runs on iPad / phone
+-   Local inference
+-   Emits GESTURE.DETECTED
 
-## Runtime Model (Phase 1)
-Single Node process.
-The bus is in-memory (no networking transport yet).
-All services subscribe inside the same process.
+### Gesture Pipeline
 
-## Mode Flow Example
-1. Dev Runner publishes `MODE.SET_REQUESTED`
-2. Bus delivers it to subscribers
-3. Alfred updates internal state
-4. Alfred publishes `MODE.CHANGED`
-5. Logger prints both
+    Camera
+      ↓
+    Vision Model
+      ↓
+    Gesture Adapter
+      ↓
+    Gotham Bus
 
-Example observed output:
-- MODE.SET_REQUESTED (source=dev-runner)
-- MODE.CHANGED (source=alfred-mode-engine)
+### Awareness Panel
+
+-   Optional Nest live feed (read-only)
+-   Motion-linked previews
+-   Security view in NIGHT
+
+------------------------------------------------------------------------
+
+## 10) Failure Containment
+
+Failures are isolated by design.
+
+  Layer       Failure           Impact
+  ----------- ----------------- ------------------
+  Adapter     Device API down   Local only
+  UI          Crash             No system impact
+  Telemetry   Down              No control loss
+  Bus         Down              System halted
+  Alfred      Down              System paused
+
+No edge failure corrupts core state.
+
+------------------------------------------------------------------------
+
+## 11) Evolution Policy
+
+All architectural changes must:
+
+-   Update README
+-   Update this document
+-   Update event contract
+-   Be logged
+
+No undocumented evolution.
+
+------------------------------------------------------------------------
+
+## 12) Summary
+
+Batcave-OS is a deterministic control platform.
+
+Events move. Alfred decides. Adapters act. UI observes. Telemetry
+remembers.
+
+Build stable first. Add intelligence second. Automate last.
+
+------------------------------------------------------------------------
+
+Version: v2\
+Last Updated: 2026-02-25\
+Owner: Krishna Reddy GV

@@ -1,9 +1,10 @@
-# 🦇 Batcave Telemetry Architecture (Phase 1 Freeze Point)
+# 🦇 Batcave Telemetry Architecture (Phase 1 Freeze --- v2)
 
-**Author:** Krishna Reddy GV\
-**Project:** batcave-os\
-**Scope:** Telemetry + BatELK (Observability Layer)\
-**State:** Frozen after MODE_SLOW rule addition
+Author: Krishna Reddy GV\
+Project: batcave-os\
+Scope: Telemetry + BatELK (Observability Layer)\
+Aligned With: Event Contract v2\
+Status: Frozen after MODE_SLOW + Alert indexing
 
 ------------------------------------------------------------------------
 
@@ -11,15 +12,18 @@
 
 Telemetry exists to:
 
--   Capture **all GothamBus events**
+-   Capture all GothamBus events
 -   Persist events to disk (JSONL)
--   Keep indexed in-memory buffers for fast inspection
--   Provide operational endpoints
+-   Maintain indexed in-memory buffers
+-   Provide operational APIs
 -   Provide trace diagnostics
 -   Provide service health visibility
+-   Index alert lifecycle events
+-   Remain read-only and non-authoritative
 
-This layer enables deterministic debugging before adding hardware,
-voice, or gestures.
+Telemetry never influences decisions.
+
+It observes truth. It does not create it.
 
 ------------------------------------------------------------------------
 
@@ -27,9 +31,9 @@ voice, or gestures.
 
     GothamBus (Event Source)
             ↓
-    Alfred Mode Engine (Orchestrator)
+    Alfred (Mode + Alert Authority)
             ↓
-    TelemetryService
+    TelemetryService (Observer)
             ↓
      ┌──────────────────────────────┐
      │ BatELK Store (In-Memory)     │
@@ -37,72 +41,105 @@ voice, or gestures.
      │  - error ring                │
      │  - trace index               │
      │  - health index              │
+     │  - alert index               │
      └──────────────────────────────┘
             ↓
     HTTP Endpoints + SSE Stream
 
+Telemetry subscribes to all events defined in Event Contract v2.
+
 ------------------------------------------------------------------------
 
-# 3️⃣ Components Added Today
+# 3️⃣ Event Contract Alignment (v2)
+
+All indexed events conform to:
+
+``` ts
+{
+  type: string,
+  intent?: string,
+  payload: object,
+  meta: {
+    schema: "batcave.event.v2",
+    eventId: string,
+    seq: number,
+    traceId: string,
+    requestId: string,
+    category: "intent|decision|device|vision|system",
+    severity: "debug|info|warn|error",
+    source: string,
+    ts: string
+  }
+}
+```
+
+Telemetry relies on `meta.seq` for deterministic ordering.
+
+------------------------------------------------------------------------
+
+# 4️⃣ Components
 
 ## A. TelemetryService
 
-Location:
-
-    services/telemetry/src/telemetry.ts
+Location: services/telemetry/
 
 Responsibilities:
 
--   Subscribes to GothamBus
--   Maintains in-memory ring buffer (recent events)
--   Persists events to JSONL
--   Broadcasts events via SSE
--   Delegates indexing to BatElkStore
+-   Subscribe to GothamBus
+-   Append events to JSONL file
+-   Broadcast via SSE
+-   Forward events to BatElkStore
 
-Persistence file:
+Persistence: local/logs/events.jsonl
 
-    local/logs/events.jsonl
+No automatic reload from disk (Phase 1 decision).
 
 ------------------------------------------------------------------------
 
 ## B. BatElkStore (Mini-ELK)
 
-Location:
-
-    services/telemetry/src/batElkStore.ts
-
 Tracks:
 
--   `recent` (5000 events)
--   `errors` (ring of error-like events)
+-   `recent` (ring buffer \~5000)
+-   `errors` (error-severity events)
 -   `traces` (Map\<traceId, Event\[\]\>)
 -   `health` (Map\<service, health state\>)
+-   `alerts` (active + historical alerts)
 
-Health fields: - ready - readinessReason - lastHeartbeatSeq -
-lastHeartbeatTs
+Alert indexing includes:
 
-This is a purpose-built in-memory observability index.
-
-------------------------------------------------------------------------
-
-## C. Service Health Model
-
-Events introduced:
-
--   `SERVICE.READINESS`
--   `SERVICE.HEARTBEAT`
-
-System traces: - `trace_system_dev_runner` - `trace_system_alfred`
-
-Health endpoint aggregates readiness + heartbeat into a live snapshot.
+-   ALERT.RAISED
+-   ALERT.CLEARED
+-   severity mapping
+-   TTL expiry tracking (observed, not enforced)
 
 ------------------------------------------------------------------------
 
-## D. Diagnostics Engine
+# 5️⃣ Health Model (v2 Aligned)
+
+Health signals are emitted as:
+
+-   type: SYSTEM.HEALTH
+-   intent: SERVICE.READINESS \| SERVICE.HEARTBEAT
+
+Health snapshot includes:
+
+-   ready
+-   readinessReason
+-   lastHeartbeatSeq
+-   lastHeartbeatTs
+
+Telemetry aggregates health into:
+
+GET /health
+
+------------------------------------------------------------------------
+
+# 6️⃣ Diagnostics Engine
 
 Endpoint:
 
-    /trace/:id/diagnostics
+/trace/:id/diagnostics
 
 Detects:
 
@@ -113,130 +150,150 @@ Detects:
 -   INTENT_UNROUTED
 -   MODE_SLOW (threshold 1500ms)
 
-Computed facts:
+Computed fields:
 
 -   eventCount
 -   durationMs
 -   modeSetToChangedMs
--   types
 -   firstSeq
 -   lastSeq
 -   hasErrors
 
-This transforms traces from logs into diagnosable execution chains.
+Alerts may later consume diagnostics output (read-only).
 
 ------------------------------------------------------------------------
 
-# 4️⃣ Available Endpoints
+# 7️⃣ Indexed Event Categories
+
+Telemetry indexes events from:
+
+## Intent Layer
+
+-   COMMAND.INTENT
+
+## Decision Layer
+
+-   MODE.CHANGED
+-   MODE.SET_REJECTED
+
+## Device Layer
+
+-   DEVICE.INTENT
+
+## Alert Layer
+
+-   ALERT.RAISED
+-   ALERT.CLEARED
+
+## Vision Layer
+
+-   PRESENCE.EVENT
+-   GESTURE.EVENT
+
+## Environment Layer
+
+-   ENV.EVENT
+
+## System Layer
+
+-   SYSTEM.HEALTH
+-   SYSTEM.EVENT
+-   DEMO.EVENT
+
+Telemetry does not differentiate business logic --- only indexes by
+type + severity.
+
+------------------------------------------------------------------------
+
+# 8️⃣ Available Endpoints
 
 ## Core
 
--   `/events`
--   `/trace/:id`
--   `/events/stream`
+-   /events
+-   /trace/:id
+-   /events/stream
 
 ## BatELK
 
--   `/errors`
--   `/traces`
--   `/search?q=`
--   `/health`
--   `/trace/:id/diagnostics`
+-   /errors
+-   /traces
+-   /search?q=
+-   /health
+-   /trace/:id/diagnostics
 
 ------------------------------------------------------------------------
 
-# 5️⃣ Quick Troubleshooting Commands
-
-## 1. Check service health
-
-    curl -s http://localhost:8791/health
-
-Expect: - ok: true - services list populated
-
-## 2. List recent traces
-
-    curl -s http://localhost:8791/traces
-
-## 3. Inspect a trace
-
-    TRACE_ID="paste_here"
-    curl -s "http://localhost:8791/trace/${TRACE_ID}"
-
-## 4. Run diagnostics
-
-    curl -s "http://localhost:8791/trace/${TRACE_ID}/diagnostics"
-
-## 5. Search for errors
-
-    curl -s "http://localhost:8791/search?q=ERROR"
-
-## 6. Check for port conflicts
-
-    lsof -nP -iTCP:8791 -sTCP:LISTEN
-    kill -9 <PID>
-
-------------------------------------------------------------------------
-
-# 6️⃣ If Something Breaks
+# 9️⃣ Troubleshooting
 
 ## No traces appear
 
--   Verify dev-runner is running
--   Verify bus.publish() is being called
--   Check JSONL file for new lines
+-   Verify dev-runner running
+-   Verify bus.publish() is called
+-   Check JSONL file
 
 ## Health shows ready=false
 
--   Ensure SERVICE.READINESS was emitted
--   Verify payload shape uses `payload`, not `data`
+-   Confirm SYSTEM.HEALTH intent SERVICE.READINESS emitted
+-   Validate envelope structure
 
 ## TRACE_NOT_FOUND
 
--   Likely restart cleared memory
--   Fetch new traceId via `/traces`
+-   Restart cleared in-memory index
+-   Fetch new traceId
 
 ## MODE_SLOW firing
 
--   Check adapter or device latency
--   Inspect timestamps in trace
+-   Inspect adapter/device latency
+-   Compare seq and ts fields
 
 ------------------------------------------------------------------------
 
-# 7️⃣ Design Decisions
+# 🔟 Failure Containment
 
--   Deterministic envelope enforced at bus layer
--   In-memory indexing (fast, simple, controlled)
--   JSONL for durable local persistence
--   Fixed traceIds for system services
--   No automatic reload from disk (Phase 1 decision)
--   Observability frozen at this feature set
+Telemetry failure:
 
-------------------------------------------------------------------------
+-   Does NOT affect bus
+-   Does NOT affect Alfred
+-   Does NOT affect adapters
 
-# 8️⃣ What This Enables Next
-
-Safe to add:
-
--   FakeLightAdapter
--   Real device adapters
--   Voice integration
--   Gesture input
-
-Because now every chain is traceable and diagnosable.
+It only impacts observability.
 
 ------------------------------------------------------------------------
 
-# 9️⃣ Freeze Statement
+# 1️⃣1️⃣ Freeze Statement
 
-BatELK scope is frozen at:
+BatELK scope frozen at:
 
 -   Event indexing
+-   Alert indexing
 -   Error indexing
 -   Trace indexing
 -   Health indexing
 -   Diagnostics rules (including MODE_SLOW)
 
-No additional telemetry features without explicit unfreeze.
+No feature expansion without explicit architectural decision.
 
 ------------------------------------------------------------------------
 
+# 1️⃣2️⃣ What This Enables
+
+Safe to add:
+
+-   FakeLightAdapter
+-   Real hardware adapters
+-   Voice integration
+-   Demo injection
+-   Nest + thermostat signals
+-   Gesture adapter (Phase 2)
+
+Because every chain is observable and diagnosable.
+
+------------------------------------------------------------------------
+
+Phase Principle:
+
+Truth → Observability → Control → Devices → Cinematic polish
+
+------------------------------------------------------------------------
+
+End of Telemetry Specification (v2).

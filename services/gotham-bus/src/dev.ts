@@ -38,18 +38,18 @@ async function requestModeChange(
   timeoutMs = 1500
 ): Promise<RequestResult> {
   const requestId = newRequestId();
-  const traceId = requestId; // Day 1 simple rule: traceId = requestId on chain start
+  const traceId = requestId; // Day 1 rule: traceId = requestId on chain start
   const source = "dev-runner";
 
   // ✅ Local validation: return a rejection-like object, but DO NOT publish
   const v = validateRequestedMode(requestedMode);
   if (!v.ok) {
-    // Return a "rejection-like" event shape for caller convenience, but not published.
-    // NOTE: this is NOT a real bus Event envelope; caller just prints it.
+    // NOTE: This is NOT a real bus event envelope (no seq, not bus-stamped).
+    // It's only for printing in this harness.
     const localRejected = {
       type: "MODE.SET_REJECTED" as const,
       payload: {
-        requestedMode: "WORK" as Mode, // fallback for typing; not meaningful
+        requestedMode: "WORK" as Mode, // typing fallback; not meaningful
         reasonCode: "VALIDATION_ERROR" as ModeRejectCode,
         reason: v.reason,
         currentMode: null as Mode | null,
@@ -57,6 +57,7 @@ async function requestModeChange(
       meta: {
         schema: "batcave.event.v1" as const,
         eventId: `evt_local_${crypto.randomUUID()}`,
+        seq: -1, // sentinel: not bus-assigned
         requestId,
         traceId,
         category: "decision" as const,
@@ -95,24 +96,24 @@ async function requestModeChange(
       }
     });
 
-    // 1) Publish INTENT (command) — shows up in logs/UI as the initiating action
-    const intent = bus.publish(
+    // 1) Publish COMMAND.INTENT — initiating action (v2)
+    const intentEvt = bus.publish(
       {
-        type: "INTENT",
+        type: "COMMAND.INTENT",
         payload: { intent: "MODE.SET", mode },
       } as any,
       { source, requestId, traceId }
     );
 
-    // 2) Translate intent -> decision request (same requestId/traceId to keep one trace chain)
+    // 2) Translate intent -> decision request (same requestId/traceId)
     bus.publish(
       {
         type: "MODE.SET_REQUESTED",
         payload: { mode },
         meta: {
-          requestId: intent.meta.requestId,
-          traceId: intent.meta.traceId,
-          source: intent.meta.source,
+          requestId: intentEvt.meta.requestId,
+          traceId: intentEvt.meta.traceId,
+          source: intentEvt.meta.source,
         },
       } as any,
       { source, requestId, traceId }
@@ -138,7 +139,10 @@ async function requestModeChange(
         { source, requestId, traceId }
       );
 
-      resolve({ ok: false, event: offline as Extract<Event, { type: "MODE.SET_REJECTED" }> });
+      resolve({
+        ok: false,
+        event: offline as Extract<Event, { type: "MODE.SET_REJECTED" }>,
+      });
     }, timeoutMs);
   });
 }
@@ -153,9 +157,8 @@ async function main() {
   const alfred = new AlfredModeEngine(bus);
   alfred.start();
 
-  // Optional: print all bus traffic so you can SEE the system in action
+  // Print all bus traffic
   bus.subscribe((e: Event) => {
-    // Keep logs consistent with the new envelope
     console.log(
       `[BUS] ${e.type} ${e.meta.category}/${e.meta.severity} req=${e.meta.requestId} trace=${e.meta.traceId}`,
       e

@@ -1,4 +1,4 @@
-import type { Event, GothamBus } from "@batcave/gotham-bus";
+import { GothamBus, type Event } from "@batcave/gotham-bus";
 import { RingBuffer } from "./ringBuffer";
 import { JsonlStore } from "./storageJsonl";
 import { SseHub } from "./sse";

@@ -1,245 +1,325 @@
-# 🦇 Batcave-OS — Event Contract & Architecture Specification (v1)
+# 🦇 Batcave-OS --- Event Contract & Architecture Specification (v2)
 
-This document defines the canonical event contract and architectural principles of Batcave-OS.
-It is the long-term reference for why and how the system is designed.
+This document defines the canonical event contract for Batcave-OS. It
+supersedes v1 and aligns with the Phase 1 and Phase 2 roadmap.
 
----
+------------------------------------------------------------------------
+
+Version: v2\
+Supersedes: v1 (2026-02-18)\
+Last Updated: 2026-02-25\
+Owner: Krishna Reddy GV
+
+------------------------------------------------------------------------
 
 ## 🎯 Purpose
 
-Batcave-OS is built as a deterministic, event-driven control platform.
-
 This document exists to:
 
-- Prevent contract drift between services
-- Preserve architectural decisions
-- Enable debugging and replay
-- Support long-term maintenance
+-   Prevent contract drift
+-   Preserve architectural intent
+-   Enable deterministic replay
+-   Support debugging and traceability
+-   Ensure long-term maintainability
 
-Six months from now, this document should explain *why* the system works the way it does.
+All services must conform to this contract.
 
----
+------------------------------------------------------------------------
 
 ## 🧠 Core Architecture Principles
 
 ### 1. Event-First Communication
 
-All services communicate only through events via the Gotham Bus.
-No service may directly call another service's internal APIs.
+All services communicate only through Gotham Bus.
 
 ### 2. Single State Authority
 
-The Alfred Mode Engine is the only service allowed to decide system state.
-All state transitions must pass through it.
+Alfred is the only state authority.
 
 ### 3. Dumb Transport
 
-The Gotham Bus only delivers messages.
-It contains no business logic.
+The bus contains no business logic.
 
-### 4. Deterministic Control Loop
+### 4. Deterministic Control
 
-All decisions must be reproducible from the event log.
-Given the same events, the system must behave the same way.
+Given the same events, behavior must be reproducible.
 
 ### 5. Adapter Isolation
 
-Hardware and external systems are isolated behind adapters.
-Failures at the edge must not corrupt core logic.
+Edge failures must not corrupt core state.
 
----
+------------------------------------------------------------------------
 
-## 📦 Event Envelope (Canonical Format)
+## 📦 Canonical Event Envelope
 
 All Batcave events must follow this structure.
 
-```json
+``` json
 {
   "type": "EVENT_TYPE",
-  "intent": "OPTIONAL.INTENT.STRING",
+  "intent": "OPTIONAL.INTENT",
   "payload": {},
   "meta": {
-    "schema": "batcave.event.v1",
+    "schema": "batcave.event.v2",
     "eventId": "evt_xxxx",
+    "seq": 1024,
+    "traceId": "trace_xxxx",
     "requestId": "req_xxxx",
+    "category": "intent|decision|device|vision|system",
+    "severity": "debug|info|warn|error",
     "source": "service-name",
     "ts": "ISO-8601"
   }
 }
 ```
 
----
+------------------------------------------------------------------------
 
 ## 📘 Required Fields
 
 ### type
 
-Defines the category of event.
-Used for routing and governance.
+Primary routing key.
 
 ### payload
 
-Contains domain-specific data.
-No metadata should live here.
+Domain data only.
 
 ### meta.schema
 
-Current schema version.
-Used for future migrations.
+Schema version.
 
 ### meta.eventId
 
-Globally unique ID for this event.
-Used for deduplication.
+Globally unique ID.
+
+### meta.seq
+
+Monotonic sequence.
+
+### meta.traceId
+
+End-to-end correlation.
 
 ### meta.requestId
 
-Correlation ID for multi-event flows.
-Used for tracing.
+Request correlation.
+
+### meta.category
+
+Logical classification.
+
+### meta.severity
+
+Operational severity.
 
 ### meta.source
 
-Name of emitting service.
+Emitter identity.
 
 ### meta.ts
 
-ISO-8601 timestamp.
+Timestamp.
 
----
+------------------------------------------------------------------------
 
 ## 📗 Optional Fields
 
 ### intent
 
-Defines specific action within a type.
-Preferred over creating new types.
-
-### meta.priority
-
-Numeric priority for arbitration.
-Used only in COMMAND.INTENT.
+Sub-action for a type.
 
 ### meta.triggerSource
 
-Original source if event is forwarded.
+Original producer.
 
----
+### meta.priority
 
-## 🧩 Canonical Event Types (v1)
+Used in arbitration.
 
-```ts
+### meta.rawText
+
+Raw voice input (voice adapter only).
+
+------------------------------------------------------------------------
+
+## 🧩 Canonical Event Types (v2)
+
+``` ts
 type EventType =
   | "COMMAND.INTENT"
   | "MODE.CHANGED"
   | "MODE.SET_REJECTED"
   | "DEVICE.INTENT"
-  | "SYSTEM.EVENT";
+
+  | "ALERT.RAISED"
+  | "ALERT.CLEARED"
+
+  | "PRESENCE.EVENT"
+  | "ENV.EVENT"
+
+  | "SYSTEM.HEALTH"
+  | "SYSTEM.EVENT"
+
+  | "DEMO.EVENT"
+  | "GESTURE.EVENT";
 ```
 
-These types are stable and must not be changed without versioning.
+These types are stable and versioned.
 
----
+------------------------------------------------------------------------
 
-## 📊 Type Ownership Rules
+## 📊 Type Ownership
 
-| Type | Owner | Purpose |
-|------|--------|---------|
-| COMMAND.INTENT | Adapters / UI / Dev | Requests |
-| MODE.CHANGED | Mode Engine | State Authority |
-| MODE.SET_REJECTED | Mode Engine | Enforcement |
-| DEVICE.INTENT | Orchestrator | Actuation |
-| SYSTEM.EVENT | Any Service | Telemetry |
+  Type                Owner                        Purpose
+  ------------------- ---------------------------- --------------------
+  COMMAND.INTENT      UI / Voice / Gesture / Dev   Requests
+  MODE.CHANGED        Alfred                       State announcement
+  MODE.SET_REJECTED   Alfred                       Enforcement
+  DEVICE.INTENT       Alfred                       Actuation
+  ALERT.\*            Alfred                       Escalation
+  PRESENCE.EVENT      Sensor Adapters              Presence
+  ENV.EVENT           Thermostat Adapter           Environment
+  SYSTEM.HEALTH       Core Services                Health
+  SYSTEM.EVENT        Any                          Telemetry
+  DEMO.EVENT          Demo API                     Simulation
+  GESTURE.EVENT       Vision Adapter               Interaction
 
-Any violation is considered a system bug.
+------------------------------------------------------------------------
 
----
+## 🧾 COMMAND.INTENT
 
-## 🧾 COMMAND.INTENT (Input → Brain)
+Used by all input sources.
 
-Used by all input sources to request actions.
+### Example --- Mode Change
 
-### Example
-
-```json
+``` json
 {
   "type": "COMMAND.INTENT",
   "intent": "MODE.SET",
   "payload": {
-    "targetMode": "DEFENSE"
+    "targetMode": "WORK"
   },
   "meta": {
-    "schema": "batcave.event.v1",
-    "eventId": "evt_123",
-    "requestId": "req_456",
-    "source": "gesture-adapter",
-    "priority": 70,
-    "ts": "2026-02-18T14:01:02.120Z"
+    "schema": "batcave.event.v2",
+    "eventId": "evt_1",
+    "seq": 200,
+    "traceId": "trace_1",
+    "requestId": "req_1",
+    "category": "intent",
+    "severity": "info",
+    "source": "voice-adapter",
+    "ts": "2026-02-25T10:00:00Z"
   }
 }
 ```
 
----
+------------------------------------------------------------------------
 
-## 🧾 MODE.CHANGED (Brain → World)
+## 🧾 MODE.CHANGED
 
-Published when a state transition is accepted.
+Published on accepted transitions.
 
-### Example
-
-```json
+``` json
 {
   "type": "MODE.CHANGED",
   "payload": {
-    "previousMode": "WORK",
-    "currentMode": "DEFENSE"
+    "previousMode": "STANDBY",
+    "currentMode": "WORK"
   },
   "meta": {
-    "schema": "batcave.event.v1",
-    "eventId": "evt_789",
-    "requestId": "req_456",
-    "decidedBy": "alfred-mode-engine",
-    "triggerSource": "gesture-adapter",
-    "ts": "2026-02-18T14:01:02.640Z"
+    "schema": "batcave.event.v2",
+    "eventId": "evt_2",
+    "seq": 201,
+    "traceId": "trace_1",
+    "requestId": "req_1",
+    "category": "decision",
+    "severity": "info",
+    "source": "alfred",
+    "ts": "2026-02-25T10:00:01Z"
   }
 }
 ```
 
----
+------------------------------------------------------------------------
 
-## 🧾 MODE.SET_REJECTED (Brain → World)
+## 🧾 MODE.SET_REJECTED
 
-Published when a command is denied.
-
-### Example
-
-```json
+``` json
 {
   "type": "MODE.SET_REJECTED",
   "payload": {
-    "requestedMode": "DEMO"
+    "requestedMode": "NIGHT",
+    "reasonCode": "LOCKOUT_ACTIVE"
   },
   "meta": {
-    "schema": "batcave.event.v1",
-    "eventId": "evt_999",
-    "requestId": "req_456",
-    "source": "alfred-mode-engine",
-    "triggerSource": "voice-adapter",
-    "reasonCode": "LOCKOUT_ACTIVE",
-    "reason": "Cooldown in effect",
-    "ts": "2026-02-18T14:01:02.700Z"
+    "schema": "batcave.event.v2",
+    "eventId": "evt_3",
+    "seq": 202,
+    "traceId": "trace_1",
+    "requestId": "req_1",
+    "category": "decision",
+    "severity": "warn",
+    "source": "alfred",
+    "ts": "2026-02-25T10:00:02Z"
   }
 }
 ```
 
----
+------------------------------------------------------------------------
 
-## 🧾 DEVICE.INTENT (Brain → Devices)
+## 🧾 ALERT.RAISED / ALERT.CLEARED
 
-Used to instruct adapters to act on hardware.
+### Raised
 
-### Example
+``` json
+{
+  "type": "ALERT.RAISED",
+  "payload": {
+    "severity": "red",
+    "reason": "Adapter unreachable",
+    "ttlSeconds": 10,
+    "source": "internal"
+  },
+  "meta": {
+    "schema": "batcave.event.v2",
+    "eventId": "evt_4",
+    "seq": 300,
+    "traceId": "trace_2",
+    "requestId": "req_sys_1",
+    "category": "system",
+    "severity": "error",
+    "source": "alfred",
+    "ts": "2026-02-25T10:05:00Z"
+  }
+}
+```
 
-```json
+### Cleared
+
+``` json
+{
+  "type": "ALERT.CLEARED",
+  "payload": {},
+  "meta": {
+    "schema": "batcave.event.v2",
+    "eventId": "evt_5",
+    "seq": 310,
+    "traceId": "trace_2",
+    "requestId": "req_sys_1",
+    "category": "system",
+    "severity": "info",
+    "source": "alfred",
+    "ts": "2026-02-25T10:05:10Z"
+  }
+}
+```
+
+------------------------------------------------------------------------
+
+## 🧾 DEVICE.INTENT
+
+``` json
 {
   "type": "DEVICE.INTENT",
   "intent": "LIGHT.SET_SCENE",
@@ -247,185 +327,148 @@ Used to instruct adapters to act on hardware.
     "scene": "work"
   },
   "meta": {
-    "schema": "batcave.event.v1",
-    "eventId": "evt_321",
-    "requestId": "req_456",
-    "source": "alfred-mode-engine",
-    "ts": "2026-02-18T14:01:03.000Z"
+    "schema": "batcave.event.v2",
+    "eventId": "evt_6",
+    "seq": 400,
+    "traceId": "trace_3",
+    "requestId": "req_2",
+    "category": "device",
+    "severity": "info",
+    "source": "alfred",
+    "ts": "2026-02-25T10:10:00Z"
   }
 }
 ```
 
----
+------------------------------------------------------------------------
 
-## 🧾 SYSTEM.EVENT (Telemetry)
+## 🧾 PRESENCE.EVENT
 
-Used for system-level facts.
-
-### Example
-
-```json
+``` json
 {
-  "type": "SYSTEM.EVENT",
-  "intent": "SERVICE.STARTED",
+  "type": "PRESENCE.EVENT",
+  "intent": "PERSON_DETECTED",
   "payload": {
-    "service": "voice-adapter"
+    "location": "desk"
   },
   "meta": {
-    "schema": "batcave.event.v1",
-    "eventId": "evt_654",
-    "requestId": "req_sys_1",
-    "source": "voice-adapter",
-    "ts": "2026-02-18T14:00:00.000Z"
+    "schema": "batcave.event.v2",
+    "eventId": "evt_7",
+    "seq": 500,
+    "traceId": "trace_4",
+    "requestId": "req_sys_2",
+    "category": "vision",
+    "severity": "info",
+    "source": "nest-adapter",
+    "ts": "2026-02-25T10:20:00Z"
   }
 }
 ```
 
----
+------------------------------------------------------------------------
 
-## ⚖️ Command Arbitration Policy (Phase 1)
+## 🧾 DEMO.EVENT
 
-### Priorities
-
-| Source | Priority |
-|--------|----------|
-| voice-adapter | 90 |
-| gesture-adapter | 70 |
-| dev-runner | 50 |
-
-### Conflict Window
-
-- 500ms
-
-### Lockout
-
-- 1500ms after MODE.CHANGED
-
-### Decision Order
-
-1. Check lockout
-2. Compare priority
-3. Validate FSM
-4. Accept or reject
-
----
-
-## ❌ Standard Rejection Codes
-
-| Code | Meaning |
-|------|---------|
-| FSM_BLOCKED | Illegal transition |
-| UNKNOWN_MODE | Undefined mode |
-| LOCKOUT_ACTIVE | Cooldown active |
-| PRIORITY_LOST | Lower priority |
-| DUPLICATE | Duplicate event |
-
----
-
-## 🔀 State Machine (FSM)
-
-### Supported Modes (Phase 1)
-
-- WORK
-- DEFENSE
-- NIGHT
-- DEMO
-
-### Transition Rules (Example)
-
-| From | To |
-|------|----|
-| WORK | DEFENSE, NIGHT |
-| DEFENSE | WORK |
-| NIGHT | WORK |
-| DEMO | WORK |
-
-All transitions are enforced by Alfred.
-
----
-
-## 🏗️ System Flow
-
-```text
-Adapter
-  ↓ COMMAND.INTENT
-Bus
-  ↓
-Mode Engine (Arbitration + FSM)
-  ↓
-MODE.CHANGED / MODE.SET_REJECTED
-  ↓
-Bus
-  ↓
-Adapters / Logger / UI
+``` json
+{
+  "type": "DEMO.EVENT",
+  "intent": "ALERT_SIMULATION",
+  "payload": {
+    "severity": "amber",
+    "reason": "Latency spike demo"
+  },
+  "meta": {
+    "schema": "batcave.event.v2",
+    "eventId": "evt_8",
+    "seq": 600,
+    "traceId": "trace_5",
+    "requestId": "req_demo_1",
+    "category": "system",
+    "severity": "warn",
+    "source": "demo-api",
+    "ts": "2026-02-25T10:30:00Z"
+  }
+}
 ```
 
----
+------------------------------------------------------------------------
 
-## 🧪 Role of dev-runner
+## 🧾 GESTURE.EVENT (Phase 2)
 
-dev-runner is a development and simulation client.
+``` json
+{
+  "type": "GESTURE.EVENT",
+  "intent": "SWIPE_RIGHT",
+  "payload": {},
+  "meta": {
+    "schema": "batcave.event.v2",
+    "eventId": "evt_9",
+    "seq": 700,
+    "traceId": "trace_6",
+    "requestId": "req_gesture_1",
+    "category": "vision",
+    "severity": "info",
+    "source": "vision-adapter",
+    "ts": "2026-02-25T10:40:00Z"
+  }
+}
+```
 
-It:
-- Publishes COMMAND.INTENT
-- Subscribes to system events
-- Enables testing without hardware
+------------------------------------------------------------------------
 
-It is not part of production runtime.
+## ⚖️ Command Arbitration (Phase 1)
 
----
+Priority (default):
+
+  Source            Priority
+  ----------------- ----------
+  voice-adapter     90
+  gesture-adapter   70
+  ui                60
+  dev-runner        50
+
+Rules: 1. Lockout check 2. Priority compare 3. FSM validation 4. Accept
+/ Reject
+
+------------------------------------------------------------------------
+
+## 🔀 FSM (Phase 1)
+
+Supported Modes:
+
+-   STANDBY
+-   WORK
+-   NIGHT
+
+Transitions:
+
+  From      To
+  --------- ---------
+  STANDBY   WORK
+  WORK      NIGHT
+  NIGHT     WORK
+  WORK      STANDBY
+
+Alert is not part of FSM.
+
+------------------------------------------------------------------------
 
 ## 🔮 Versioning Policy
 
 Breaking changes require:
 
-- New schema version
-- Migration notes
-- Compatibility window
+-   New schema
+-   Migration notes
+-   Compatibility window
 
-Example:
+------------------------------------------------------------------------
 
-```
-batcave.event.v2
-```
+## ✅ Compliance
 
----
+All services must validate events against this document.
 
-## 📌 Design Decisions
+Violations are architectural bugs.
 
-### Why Separate INTENT vs STATE
+------------------------------------------------------------------------
 
-To distinguish requests from facts.
-Prevents unauthorized state mutation.
-
-### Why Few Types
-
-Stable routing and governance.
-Avoids string explosion.
-
-### Why Central Authority
-
-Prevents race conditions and split-brain state.
-
-### Why Event-Only Boundaries
-
-Enforces service independence.
-Enables replay and simulation.
-
----
-
-## ✅ Compliance Rule
-
-All services must validate outgoing events against this document.
-Violations are considered architectural bugs.
-
----
-
-## 📅 Document Status
-
-Version: v1
-Last Updated: 2026-02-18
-Owner: Krishna Reddy GV
-
----
-
+End of specification.

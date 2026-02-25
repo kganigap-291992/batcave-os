@@ -8,13 +8,23 @@ type TraceWarning = {
   meta?: Record<string, unknown>;
 };
 
+// ✅ Contract v2 canonical error heuristic
 function isErrorEvent(e: Event) {
-  const level = (e.meta as any)?.level;
-  return (
-    level === "error" ||
-    Boolean((e.meta as any)?.error) ||
-    (typeof e.type === "string" && e.type.endsWith(".ERROR"))
-  );
+  // Canonical: meta.severity is assigned by GothamBus
+  if (e.meta?.severity === "error") return true;
+
+  // Fallbacks (in case a producer bypasses mapping or for legacy/debug events)
+  const t = String(e.type);
+  const isRejected = t.endsWith("_REJECTED");
+  const isFailed = t.endsWith("_FAILED");
+  const isDotError = t.endsWith(".ERROR");
+
+  // Alerts: payload severity can indicate error even if meta.severity is overridden later
+  const isAlertError =
+    e.type === "ALERT.RAISED" &&
+    String((e as any).payload?.severity ?? "").toLowerCase() === "error";
+
+  return isRejected || isFailed || isDotError || isAlertError;
 }
 
 function safeParseMs(ts?: string) {
@@ -42,6 +52,7 @@ function computeTraceDiagnostics(traceId: string, events: Event[]) {
         lastSeq: null,
         hasErrors: false,
         modeSetToChangedMs: null,
+        intentToRequestedMs: null,
       },
     };
   }
@@ -50,13 +61,14 @@ function computeTraceDiagnostics(traceId: string, events: Event[]) {
   const typeSet = Array.from(new Set(types));
 
   const hasRequested = types.includes("MODE.SET_REQUESTED");
+  const hasAccepted = types.includes("MODE.SET_ACCEPTED");
+  const hasRejected = types.includes("MODE.SET_REJECTED");
   const hasChanged = types.includes("MODE.CHANGED");
 
   // duration (first -> last)
   const startMs = safeParseMs(events[0]?.meta?.ts);
   const endMs = safeParseMs(events[events.length - 1]?.meta?.ts);
-  const durationMs =
-    startMs !== null && endMs !== null ? endMs - startMs : null;
+  const durationMs = startMs !== null && endMs !== null ? endMs - startMs : null;
 
   // MODE latency: MODE.SET_REQUESTED -> MODE.CHANGED
   const requestedEvt = events.find((e) => e.type === "MODE.SET_REQUESTED");
@@ -66,9 +78,14 @@ function computeTraceDiagnostics(traceId: string, events: Event[]) {
   const modeSetToChangedMs =
     reqMs !== null && chgMs !== null ? chgMs - reqMs : null;
 
+  // Optional: router latency (COMMAND.INTENT -> MODE.SET_REQUESTED)
+  const intentEvt = events.find((e) => e.type === "COMMAND.INTENT");
+  const intentMs = safeParseMs(intentEvt?.meta?.ts);
+  const intentToRequestedMs =
+    intentMs !== null && reqMs !== null ? reqMs - intentMs : null;
+
   // MODE_SLOW: mode transition took too long (threshold is Phase 1 conservative)
   const MODE_SLOW_THRESHOLD_MS = 1500;
-
   if (modeSetToChangedMs !== null && modeSetToChangedMs > MODE_SLOW_THRESHOLD_MS) {
     warnings.push({
       code: "MODE_SLOW",
@@ -88,7 +105,9 @@ function computeTraceDiagnostics(traceId: string, events: Event[]) {
   }
 
   // MODE_NO_CHANGE
-  if (hasRequested && !hasChanged) {
+  // Only warn when a request was made but neither CHANGED nor a REJECT happened.
+  // If we got MODE.SET_REJECTED (ex: SAME_MODE), "no change" is expected.
+  if (hasRequested && !hasChanged && !hasRejected) {
     warnings.push({
       code: "MODE_NO_CHANGE",
       msg: "MODE.SET_REQUESTED seen but no MODE.CHANGED followed.",
@@ -109,18 +128,22 @@ function computeTraceDiagnostics(traceId: string, events: Event[]) {
     }
   }
 
-  // INTENT_UNROUTED: INTENT exists but no follow-up command/decision events
-  const hasIntent = types.includes("INTENT");
-  const hasFollowup =
-    hasRequested ||
-    types.includes("MODE.SET_ACCEPTED") ||
-    types.includes("MODE.SET_REJECTED") ||
-    hasChanged;
+  // ✅ COMMAND_INTENT_UNROUTED: command exists but no follow-up decision events
+  const hasCommandIntent = types.includes("COMMAND.INTENT");
+  const hasFollowup = hasRequested || hasAccepted || hasRejected || hasChanged;
 
-  if (hasIntent && !hasFollowup) {
+  if (hasCommandIntent && !hasFollowup) {
     warnings.push({
-      code: "INTENT_UNROUTED",
-      msg: "INTENT seen but no downstream command/decision events followed (router/engine may not be listening).",
+      code: "COMMAND_INTENT_UNROUTED",
+      msg: "COMMAND.INTENT seen but no downstream decision events followed (router/engine may not be listening).",
+    });
+  }
+
+  // ✅ COMMAND_INTENT_NO_REQUESTED: command exists but MODE.SET_REQUESTED never emitted
+  if (hasCommandIntent && !hasRequested) {
+    warnings.push({
+      code: "COMMAND.INTENT_NO_REQUESTED",
+      msg: "COMMAND.INTENT seen but MODE.SET_REQUESTED did not occur (missing intent->request translation).",
     });
   }
 
@@ -128,6 +151,7 @@ function computeTraceDiagnostics(traceId: string, events: Event[]) {
     eventCount: events.length,
     durationMs,
     modeSetToChangedMs,
+    intentToRequestedMs,
     types: typeSet,
     firstSeq: events[0]?.meta?.seq ?? null,
     lastSeq: events[events.length - 1]?.meta?.seq ?? null,
@@ -141,7 +165,7 @@ export function registerRoutes(app: any, telemetry: TelemetryService) {
   // --- Existing: recent events ---
   app.get("/events", (req: Request, res: Response) => {
     const limit = Number(req.query.limit ?? 200);
-    res.json(telemetry.getEvents(isFinite(limit) ? limit : 200));
+    res.json(telemetry.getEvents(Number.isFinite(limit) ? limit : 200));
   });
 
   // --- Trace (now powered by BatELK store) ---
@@ -158,7 +182,7 @@ export function registerRoutes(app: any, telemetry: TelemetryService) {
   });
 
   // --- SSE stream ---
-  app.get("/events/stream", (req: Request, res: Response) => {
+  app.get("/events/stream", (_req: Request, res: Response) => {
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
@@ -184,7 +208,7 @@ export function registerRoutes(app: any, telemetry: TelemetryService) {
   app.get("/traces", (req: Request, res: Response) => {
     const limit = Number(req.query.limit ?? 50);
     res.json({
-      items: telemetry.batElk.listRecentTraceIds(isFinite(limit) ? limit : 50),
+      items: telemetry.batElk.listRecentTraceIds(Number.isFinite(limit) ? limit : 50),
     });
   });
 
@@ -197,22 +221,24 @@ export function registerRoutes(app: any, telemetry: TelemetryService) {
 
     res.json({
       q,
-      items: telemetry.batElk.search(q, isFinite(limit) ? limit : 200),
+      items: telemetry.batElk.search(q, Number.isFinite(limit) ? limit : 200),
     });
   });
 
-  // Computed health snapshot
+  // ✅ Computed health snapshot (stale/offline aware)
   app.get("/health", (_req: Request, res: Response) => {
-    const services = Array.from(telemetry.batElk.health.values());
+    const snapshot = telemetry.batElk.getHealthSnapshot();
 
     res.json({
-      ok: true,
+      ok: snapshot.ok,
+      thresholds: snapshot.thresholds,
       counts: {
         recentEvents: telemetry.batElk.recent.size(),
         recentErrors: telemetry.batElk.errors.size(),
         traceCount: telemetry.batElk.traces.size,
+        services: snapshot.counts,
       },
-      services,
+      services: snapshot.services,
     });
   });
 }

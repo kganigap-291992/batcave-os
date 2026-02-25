@@ -86,11 +86,12 @@ async function main() {
   const requestId = `req_${crypto.randomUUID()}`;
   const traceId = requestId;
 
+  // ✅ Contract v2: COMMAND.INTENT (intent stays inside payload)
   bus.publish(
     {
-      type: "INTENT",
+      type: "COMMAND.INTENT",
       payload: { intent: "MODE.SET", mode },
-    },
+    } as any,
     { source: "dev-runner", requestId, traceId }
   );
 

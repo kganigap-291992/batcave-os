@@ -1,3 +1,5 @@
+// services/telemetry/src/server.ts
+
 import express from "express";
 import path from "path";
 import { GothamBus } from "@batcave/gotham-bus";
@@ -14,6 +16,8 @@ async function main() {
   app.use(express.json());
 
   const bus = new GothamBus();
+
+  // Phase 1: Alfred in-process for deterministic E2E testing
   const alfred = new AlfredModeEngine(bus);
   alfred.start();
 
@@ -21,9 +25,37 @@ async function main() {
   const telemetry = new TelemetryService(bus, jsonlPath);
   telemetry.start();
 
+  // Wire routes AFTER telemetry is live
   registerRoutes(app, telemetry);
 
+  // ------------------------------------------------------------
+  // ✅ PHASE 1.5 — Health signals (Readiness + Heartbeat)
+  // ------------------------------------------------------------
+  const sysTraceId = "trace_system_telemetry";
+
+  // One-shot readiness
+  bus.publish(
+    {
+      type: "SERVICE.READINESS",
+      payload: { service: "telemetry", ready: true, reason: "OK" },
+    } as any,
+    { source: "telemetry", requestId: sysTraceId, traceId: sysTraceId }
+  );
+
+  // Heartbeat every 15s
+  setInterval(() => {
+    bus.publish(
+      {
+        type: "SERVICE.HEARTBEAT",
+        payload: { service: "telemetry" },
+      } as any,
+      { source: "telemetry", requestId: sysTraceId, traceId: sysTraceId }
+    );
+  }, 15000);
+
+  // ------------------------------------------------------------
   // Debug trigger (Day 1 proof)
+  // ------------------------------------------------------------
   app.post("/debug/mode/:mode", (req, res) => {
     const mode = String(req.params.mode).toUpperCase();
 
@@ -37,16 +69,16 @@ async function main() {
     const requestId = `req_debug_${Date.now()}`;
     const traceId = requestId;
 
-    // 1) Emit INTENT
+    // 1) Emit COMMAND.INTENT (contract v2)
     bus.publish(
       {
-        type: "INTENT",
+        type: "COMMAND.INTENT",
         payload: { intent: "MODE.SET", mode },
         meta: { requestId, traceId, source: "telemetry-debug" },
       } as any
     );
 
-    // 2) Emit MODE.SET_REQUESTED (Option A)
+    // 2) Emit MODE.SET_REQUESTED (Alfred listens to this)
     bus.publish(
       {
         type: "MODE.SET_REQUESTED",

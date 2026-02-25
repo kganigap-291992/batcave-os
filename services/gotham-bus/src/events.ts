@@ -24,17 +24,17 @@ export type EventSeverity = "debug" | "info" | "warn" | "error";
 export type EventMeta = {
   schema: EventSchema;
 
-  eventId: string;    // evt_xxx
-  seq: number;        // monotonic per-process sequence (bus-assigned)
-  
-  traceId: string;    // trace_xxx (or reuse requestId)
-  requestId: string;  // req_xxx
+  eventId: string; // evt_xxx
+  seq: number; // monotonic per-process sequence (bus-assigned)
+
+  traceId: string; // trace_xxx (or reuse requestId)
+  requestId: string; // req_xxx
 
   category: EventCategory;
   severity: EventSeverity;
 
   source: string;
-  ts: string;         // ISO-8601
+  ts: string; // ISO-8601
 };
 
 export type Envelope<TType extends string, TPayload> = {
@@ -72,26 +72,63 @@ export type ModeSetRejectedPayload = {
 // Mode Events
 // =====================
 
-export type ModeSetRequestedEvent =
-  Envelope<"MODE.SET_REQUESTED", ModeSetRequestedPayload>;
+export type ModeSetRequestedEvent = Envelope<"MODE.SET_REQUESTED", ModeSetRequestedPayload>;
 
-export type ModeSetAcceptedEvent =
-  Envelope<"MODE.SET_ACCEPTED", ModeSetAcceptedPayload>;
+export type ModeSetAcceptedEvent = Envelope<"MODE.SET_ACCEPTED", ModeSetAcceptedPayload>;
 
-export type ModeSetRejectedEvent =
-  Envelope<"MODE.SET_REJECTED", ModeSetRejectedPayload>;
+export type ModeSetRejectedEvent = Envelope<"MODE.SET_REJECTED", ModeSetRejectedPayload>;
 
-export type ModeChangedEvent =
-  Envelope<"MODE.CHANGED", ModeChangedPayload>;
+export type ModeChangedEvent = Envelope<"MODE.CHANGED", ModeChangedPayload>;
 
 // =====================
-// Intents
+// Service Events (Health)
 // =====================
 
-export type IntentName =
-  | "MODE.SET"
-  | "LIGHT.SET"
-  | "PLUG.SET";
+export type ServiceReadinessPayload = {
+  service: string;
+  ready: boolean;
+  reason?: string;
+};
+
+export type ServiceHeartbeatPayload = {
+  service: string;
+};
+
+export type ServiceReadinessEvent = Envelope<"SERVICE.READINESS", ServiceReadinessPayload>;
+
+export type ServiceHeartbeatEvent = Envelope<"SERVICE.HEARTBEAT", ServiceHeartbeatPayload>;
+
+// =====================
+// Alert Events (Operational overlay)
+// =====================
+
+export type AlertSeverity = "warn" | "error";
+
+export type AlertRaisedPayload = {
+  alertId: string; // stable key so UI can dedupe/update
+  title: string;
+  severity: AlertSeverity;
+  ttlMs: number;
+
+  // Optional context for debugging + attribution
+  sourceEventType?: string;
+  details?: unknown;
+};
+
+export type AlertClearedPayload = {
+  alertId: string;
+  reason?: string;
+};
+
+export type AlertRaisedEvent = Envelope<"ALERT.RAISED", AlertRaisedPayload>;
+
+export type AlertClearedEvent = Envelope<"ALERT.CLEARED", AlertClearedPayload>;
+
+// =====================
+// Intents (Commands)
+// =====================
+
+export type IntentName = "MODE.SET" | "LIGHT.SET" | "PLUG.SET";
 
 export type IntentPayloadMap = {
   "MODE.SET": { mode: Mode };
@@ -100,12 +137,16 @@ export type IntentPayloadMap = {
 };
 
 /**
- * IntentEvent payload includes the intent name + its specific payload.
- * This keeps the event shape consistent:
- * { type, payload, meta } with no extra top-level fields.
+ * Command intent payload includes the intent name + its specific payload.
+ * We keep intent INSIDE payload (your decision).
+ *
+ * Shape:
+ * { type: "COMMAND.INTENT", payload: { intent: "MODE.SET", mode: "NIGHT" }, meta: ... }
  */
-export type IntentEvent<T extends IntentName = IntentName> =
-  Envelope<"INTENT", { intent: T } & IntentPayloadMap[T]>;
+export type CommandIntentEvent<T extends IntentName = IntentName> = Envelope<
+  "COMMAND.INTENT",
+  { intent: T } & IntentPayloadMap[T]
+>;
 
 // =====================
 // Final Event Union
@@ -116,20 +157,33 @@ export type Event =
   | ModeSetAcceptedEvent
   | ModeSetRejectedEvent
   | ModeChangedEvent
-  | IntentEvent;
+  | ServiceReadinessEvent
+  | ServiceHeartbeatEvent
+  | AlertRaisedEvent
+  | AlertClearedEvent
+  | CommandIntentEvent;
 
 // =====================
 // Category + Severity Mapping (single source of truth)
 // =====================
 
 export function categoryForType(type: Event["type"] | string): EventCategory {
-  // NOTE: We currently represent intents as type === "INTENT"
-  if (type === "INTENT") return "intent";
+  // Commands
+  if (type === "COMMAND.INTENT") return "intent";
 
+  // Decisions
   if (type.startsWith("MODE.")) return "decision";
+
+  // Device actuation
   if (type.startsWith("LIGHT.") || type.startsWith("PLUG.") || type.startsWith("ADAPTER."))
     return "device";
+
+  // Vision / perception
   if (type.startsWith("VISION.")) return "vision";
+
+  // System / ops (health, alerts, telemetry facts)
+  if (type.startsWith("SERVICE.")) return "system";
+  if (type.startsWith("ALERT.")) return "system";
   if (type.startsWith("SYSTEM.")) return "system";
 
   // Default safe bucket
@@ -141,6 +195,9 @@ export function severityForType(type: Event["type"] | string): EventSeverity {
   if (type.endsWith("_REJECTED")) return "error";
   if (type.endsWith("_FAILED")) return "error";
   if (type.includes(".ERROR")) return "error";
+
+  // Alerts are warnings by default (AlertManager may override by passing meta.severity)
+  if (type === "ALERT.RAISED") return "warn";
 
   return "info";
 }
