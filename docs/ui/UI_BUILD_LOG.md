@@ -93,3 +93,50 @@ App: apps/batconsole-ui
 - `grep -n "data-theme" apps/batconsole-ui/src/app/layout.tsx`
 
 ✔ Status: IN PROGRESS (tokens complete; layout hook pending)
+
+
+## PHASE 1 — Shell & Navigation
+
+### Step 1 — Sidebar component
+✔ What we implemented:
+- Created `Sidebar.tsx`
+- Navigation routes: Home, Logs, Traces, Errors, Health
+- Active route highlighting using `usePathname()`
+
+✔ Why this matters:
+- Establishes navigation spine for Batconsole
+- All future systems plug into this structure
+
+✔ Status: COMPLETE
+
+---
+
+### Step 2 — Main console layout (AppShell)
+✔ What we implemented:
+- Created `AppShell.tsx`
+- Wrapped all pages with sidebar + main content region
+- Wired into `src/app/layout.tsx`
+
+✔ Why this matters:
+- Creates persistent console frame
+- Guarantees structural consistency across routes
+
+✔ Status: COMPLETE
+
+---
+
+### Step 3 — Placeholder routing
+✔ What we implemented:
+- Created `/logs`, `/traces`, `/errors`, `/health` routes
+- Verified navigation works across all pages
+
+✔ Why this matters:
+- Confirms routing backbone before adding real UI systems
+
+✔ Status: COMPLETE
+
+### Phase 2 — Mini polish: depth + hierarchy
+✔ Increased main console pane contrast (border/shadow/background opacity)
+✔ Elevated hero panel (Mode Dial) with subtle blue edge + inner glow
+✔ Improved section title contrast for readability
+✔ Status: COMPLETE
