@@ -5,6 +5,5 @@ build
 # Local runtime state
 **/local/
 services/telemetry/local/logs/
-services/telemetry/local/logs/
 local/logs/
 *.jsonl
