@@ -273,29 +273,122 @@ curl -sS "http://localhost:8790/trace/$TRACE_ID" | jq '.[] | {type, reasonCode:(
 ```
 
 ---
+ Phase 2 --- Alert Manager (DONE)
 
-## 6) Roadmap: what’s next + where we stand
+## Goal
 
-### Phase 1.7 — Alert Manager (NEXT)
-**Goal:** Convert “bad situations” into explicit alert events that the HUD can render.
+Introduce explicit alarm lifecycle with deterministic TTL behavior.
 
-**What we will build**
-- New service or module: `AlertManager`
-- Emits:
-  - `ALERT.RAISED` (with TTL + severity)
-  - `ALERT.CLEARED`
-- Rules (Phase 1):
-  - stale heartbeat → alert
-  - degraded readiness → alert
-  - engine rejects (optional) → alert
-- TTL behavior:
-  - alerts auto-expire unless refreshed
-  - HUD turns amber/red briefly (per your pinned UI behavior)
+## Why Alert Manager exists
 
-**Where code will live**
-- likely `services/telemetry/src/alertManager.ts` initially (fast iteration)
-- later could be its own service `services/alert-manager`
+Before Phase 2: - We had health - We had traces - We had diagnostics -
+But no explicit "alert" system
 
+Alert Manager introduces: - First-class alarm events - Server-owned TTL
+logic - Deterministic lifecycle - UI remains dumb (render-only)
+
+------------------------------------------------------------------------
+
+## Architecture Addition
+
+    GothamBus
+        |
+        v
+    AlertManager (TTL + state)
+        |
+        v
+    ALERT.RAISED / ALERT.CLEARED
+        |
+        v
+    TelemetryService
+        |
+        v
+    BatELK indices + jsonl
+
+------------------------------------------------------------------------
+
+## What we implemented
+
+### 1. AlertManager module
+
+File: `services/telemetry/src/alertManager.ts`
+
+Responsibilities: - Maintain active alert map - Schedule TTL
+expiration - Emit: - `ALERT.RAISED` - `ALERT.CLEARED` - Preserve traceId
+via bus publish context
+
+------------------------------------------------------------------------
+
+### 2. Debug endpoint to raise alerts
+
+    POST /debug/alert/:severity
+
+Supported severities: - INFO - WARN - ERROR - CRITICAL
+
+Optional body:
+
+    {
+      "ttlMs": 3000,
+      "title": "Overheat",
+      "message": "Temp spike",
+      "traceId": "optional-custom-trace"
+    }
+
+------------------------------------------------------------------------
+
+### 3. Query active alerts
+
+    GET /alerts
+
+Returns:
+
+    {
+      "ok": true,
+      "alerts": [ ... ]
+    }
+
+------------------------------------------------------------------------
+
+### 4. TTL Auto-Clear
+
+When TTL expires: - Alert removed from memory - `ALERT.CLEARED`
+emitted - No UI logic required
+
+------------------------------------------------------------------------
+
+## Runbook --- Verify Alert Manager
+
+### Raise alert
+
+    curl -sS -X POST http://localhost:8790/debug/alert/WARN   -H "Content-Type: application/json"   -d '{"ttlMs":5000,"title":"Test Warn","message":"hello"}' | jq
+
+### Check active alerts
+
+    curl -sS http://localhost:8790/alerts | jq
+
+### Wait for TTL expiration
+
+    sleep 6
+    curl -sS http://localhost:8790/alerts | jq
+
+### Verify trace linkage
+
+    TRACE_ID=$(curl -sS -X POST http://localhost:8790/debug/alert/WARN   -H "Content-Type: application/json"   -d '{"ttlMs":5000}' | jq -r '.alert.traceId')
+
+    curl -sS "http://localhost:8790/trace/$TRACE_ID" | jq
+
+### Verify events feed
+
+    curl -sS http://localhost:8790/events | jq '.[] | select(.type | test("^ALERT\."))'
+
+### Verify jsonl persistence
+
+    tail -n 100 local/logs/events.jsonl | grep "ALERT\."
+
+------------------------------------------------------------------------
+
+---
+##  Roadmap: what’s next + where we stand
 ---
 
 ### Phase 2 — HUD wiring (after Alert Manager)
@@ -368,6 +461,6 @@ curl -sS "http://localhost:8790/trace/$TRACE_ID" | jq '.[] | {type, reasonCode:(
 ✅ BatELK indices: traces/errors/search/health  
 ✅ Health status computation (stale/offline)  
 ✅ Trace diagnostics warnings/facts  
-➡️ Next: Alert Manager (Phase 1.7)
+✅ Next: Alert Manager (Phase 1.7)
 
 ---
