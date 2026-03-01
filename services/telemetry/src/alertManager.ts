@@ -9,14 +9,31 @@ export type ActiveAlert = {
   title: string;
   message?: string;
   traceId?: string;
-  raisedAt: string;     // ISO
-  expiresAt: string;    // ISO
+  raisedAt: string; // ISO
+  expiresAt: string; // ISO
   ttlMs: number;
-  source: string;       // e.g. "telemetry"
+  source: string; // e.g. "telemetry" | "telemetry-debug"
+};
+
+type AlertRaisedPayload = {
+  alertId: string;
+  severity: AlertSeverity;
+  title: string;
+  message?: string;
+  traceId?: string;
+  ttlMs: number;
+  expiresAt: string; // ISO
+};
+
+type AlertClearedPayload = {
+  alertId: string;
+  severity: AlertSeverity;
+  reason: string;
+  traceId?: string;
 };
 
 type Deps = {
-  emit: (evt: any) => void; // uses your telemetry/bus emit pipeline
+  emit: (evt: { type: string; payload: any }) => void; // envelope-style emit
   now?: () => Date;
 };
 
@@ -32,10 +49,17 @@ export class AlertManager {
   }
 
   list(): ActiveAlert[] {
-    return Array.from(this.alerts.values()).sort((a, b) => a.raisedAt.localeCompare(b.raisedAt));
+    // newest first for HUD
+    return Array.from(this.alerts.values()).sort((a, b) =>
+      b.raisedAt.localeCompare(a.raisedAt)
+    );
   }
 
-  raise(input: Omit<ActiveAlert, "id" | "raisedAt" | "expiresAt" | "source"> & { source?: string }) {
+  raise(
+    input: Omit<ActiveAlert, "id" | "raisedAt" | "expiresAt" | "source"> & {
+      source?: string;
+    }
+  ) {
     const id = randomUUID();
     const raisedAt = this.now();
     const expiresAt = new Date(raisedAt.getTime() + input.ttlMs);
@@ -54,20 +78,21 @@ export class AlertManager {
 
     this.alerts.set(id, alert);
 
-    this.emit({
-      type: "ALERT.RAISED",
-      ts: raisedAt.toISOString(),
-      source: "alert-manager",
-      severity: alert.severity,
+    const payload: AlertRaisedPayload = {
       alertId: alert.id,
+      severity: alert.severity,
       title: alert.title,
       message: alert.message,
       traceId: alert.traceId,
       ttlMs: alert.ttlMs,
       expiresAt: alert.expiresAt,
-    });
+    };
+
+    this.emit({ type: "ALERT.RAISED", payload });
 
     const t = setTimeout(() => this.clear(id, "TTL_EXPIRED"), input.ttlMs);
+    // Optional: don't keep node alive only because of timers (nice for tests/dev)
+    (t as any).unref?.();
     this.timers.set(id, t);
 
     return alert;
@@ -83,15 +108,14 @@ export class AlertManager {
 
     this.alerts.delete(alertId);
 
-    this.emit({
-      type: "ALERT.CLEARED",
-      ts: this.now().toISOString(),
-      source: "alert-manager",
-      severity: alert.severity,
+    const payload: AlertClearedPayload = {
       alertId: alert.id,
+      severity: alert.severity,
       reason,
       traceId: alert.traceId,
-    });
+    };
+
+    this.emit({ type: "ALERT.CLEARED", payload });
 
     return true;
   }

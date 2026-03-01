@@ -13,6 +13,10 @@ const PORT = Number(process.env.TELEMETRY_PORT ?? 8790);
 const ALLOWED_MODES = ["WORK", "DEFENSE", "NIGHT", "DEMO", "SILENT"] as const;
 const ALLOWED_ALERT_SEVERITIES = ["INFO", "WARN", "ERROR", "CRITICAL"] as const;
 
+function makeTraceId(prefix: string) {
+  return `${prefix}_${Date.now()}`;
+}
+
 async function main() {
   const app = express();
   app.use(express.json());
@@ -28,21 +32,21 @@ async function main() {
   telemetry.start();
 
   // ------------------------------------------------------------
-  // ✅ PHASE 2 — Alert Manager (wired after telemetry.start())
-  //   IMPORTANT: publish with context so traceId/requestId stay stable
+  // ✅ Alert Manager (wired after telemetry.start())
   // ------------------------------------------------------------
   const alertManager = new AlertManager({
-    emit: (evt: any) => {
-      const traceId =
-        typeof evt?.traceId === "string" && evt.traceId.trim().length > 0
-          ? evt.traceId
+    emit: (evt: { type: string; payload: any }) => {
+      // Prefer traceId inside payload (now consistent)
+      const payloadTraceId =
+        typeof evt?.payload?.traceId === "string" && evt.payload.traceId.trim().length > 0
+          ? evt.payload.traceId.trim()
           : undefined;
 
-      // Default: keep requestId aligned to traceId for tight grouping
-      const requestId =
-        typeof evt?.requestId === "string" && evt.requestId.trim().length > 0
-          ? evt.requestId
-          : traceId;
+      // Always guarantee a traceId for correlation
+      const traceId = payloadTraceId ?? makeTraceId("trace_alert");
+
+      // Keep requestId aligned to traceId for tight grouping
+      const requestId = traceId;
 
       bus.publish(evt as any, {
         source: "alert-manager",
@@ -56,11 +60,10 @@ async function main() {
   registerRoutes(app, telemetry);
 
   // ------------------------------------------------------------
-  // ✅ PHASE 1.5 — Health signals (Readiness + Heartbeat)
+  // ✅ Health signals (Readiness + Heartbeat)
   // ------------------------------------------------------------
   const sysTraceId = "trace_system_telemetry";
 
-  // One-shot readiness
   bus.publish(
     {
       type: "SERVICE.READINESS",
@@ -69,7 +72,6 @@ async function main() {
     { source: "telemetry", requestId: sysTraceId, traceId: sysTraceId }
   );
 
-  // Heartbeat every 15s
   setInterval(() => {
     bus.publish(
       {
@@ -81,7 +83,7 @@ async function main() {
   }, 15000);
 
   // ------------------------------------------------------------
-  // Debug trigger (Day 1 proof)
+  // Debug trigger: mode pipeline proof (contract-pure publish)
   // ------------------------------------------------------------
   app.post("/debug/mode/:mode", (req, res) => {
     const mode = String(req.params.mode).toUpperCase();
@@ -101,8 +103,8 @@ async function main() {
       {
         type: "COMMAND.INTENT",
         payload: { intent: "MODE.SET", mode },
-        meta: { requestId, traceId, source: "telemetry-debug" },
-      } as any
+      } as any,
+      { source: "telemetry-debug", requestId, traceId }
     );
 
     // 2) Emit MODE.SET_REQUESTED (Alfred listens to this)
@@ -110,15 +112,15 @@ async function main() {
       {
         type: "MODE.SET_REQUESTED",
         payload: { mode },
-        meta: { requestId, traceId, source: "telemetry-debug" },
-      } as any
+      } as any,
+      { source: "telemetry-debug", requestId, traceId }
     );
 
     res.json({ ok: true, requestId, traceId, mode });
   });
 
   // ------------------------------------------------------------
-  // ✅ PHASE 2 — Demo alert trigger (optional, but accelerates UI)
+  // Debug trigger: alert pipeline proof
   // ------------------------------------------------------------
   app.post("/debug/alert/:severity", (req, res) => {
     const severity = String(req.params.severity).toUpperCase();
@@ -146,10 +148,11 @@ async function main() {
         ? req.body.message.trim()
         : "Triggered via /debug/alert";
 
+    // Ensure traceId always exists (good for /trace)
     const traceId =
       typeof req.body?.traceId === "string" && req.body.traceId.trim().length > 0
         ? req.body.traceId.trim()
-        : `trace_alert_${Date.now()}`;
+        : makeTraceId("trace_alert");
 
     const alert = alertManager.raise({
       severity: severity as any,
@@ -164,7 +167,7 @@ async function main() {
   });
 
   // ------------------------------------------------------------
-  // ✅ PHASE 2.3 — Alerts endpoint (UI polls this)
+  // Alerts endpoint (UI polls this)
   // ------------------------------------------------------------
   app.get("/alerts", (_req, res) => {
     res.json({ ok: true, alerts: alertManager.list() });
