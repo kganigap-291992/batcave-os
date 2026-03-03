@@ -78,60 +78,184 @@ function severityToLevel(sev?: string): SignalLevel {
   return "INFO";
 }
 
+/**
+ * Mode derivation priority (spec-aligned):
+ * 1) ERROR/CRITICAL active alerts -> DEFENSE bias
+ * 2) last MODE.CHANGED event
+ * 3) default WORK
+ */
 function pickMode(events: TelemetryEvent[], alerts: AlertsResponse["alerts"]): BatMode {
-  // If any active alerts, bias toward DEFENSE (cinematic + useful)
-  if (alerts.length > 0) return "DEFENSE";
+  const hasCriticalAlert = alerts.some(
+    (a) => a.severity === "ERROR" || a.severity === "CRITICAL"
+  );
+  if (hasCriticalAlert) return "DEFENSE";
 
-  // Otherwise try to infer from MODE.CHANGED events
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i];
     if (e.type === "MODE.CHANGED") {
       const m = e.payload?.mode ?? e.payload?.currentMode ?? e.payload?.to;
       const upper = typeof m === "string" ? m.toUpperCase() : "";
-      if (["WORK", "DEFENSE", "NIGHT", "DEMO", "SILENT"].includes(upper)) return upper as BatMode;
+      if (["WORK", "DEFENSE", "NIGHT", "DEMO", "SILENT"].includes(upper)) {
+        return upper as BatMode;
+      }
     }
   }
+
   return "WORK";
 }
 
 function buildHealthBadges(health: HealthResponse, telemUrlLabel: string): HealthBadge[] {
   const telemSvc = health.services?.find((s) => s.service === "telemetry");
   const telemStatus: HealthBadge["status"] =
-    !telemSvc ? "DOWN" : telemSvc.status === "healthy" ? "OK" : telemSvc.status === "degraded" || telemSvc.status === "stale" ? "WARN" : "DOWN";
+    !telemSvc
+      ? "DOWN"
+      : telemSvc.status === "healthy"
+        ? "OK"
+        : telemSvc.status === "degraded" || telemSvc.status === "stale"
+          ? "WARN"
+          : "DOWN";
 
-  // BUS/ALFRED/ADAPTERS will become real later; keep placeholders for now.
+  // Phase 1 placeholders (Phase 1.2 will make these fully truthful)
   return [
-    { key: "BUS", status: "WARN", detail: "in-process" }, // Phase 1: in-process bus
+    { key: "BUS", status: "WARN", detail: "in-process" },
     { key: "TELEMETRY", status: telemStatus, detail: telemUrlLabel },
     { key: "ALFRED", status: "WARN", detail: "in-process" },
     { key: "ADAPTERS", status: "OK", detail: "none" },
   ];
 }
 
-function toSignals(events: TelemetryEvent[]): SignalEvent[] {
-  const mapped = events
-    .map((e) => {
+function safeParseIso(ts?: string): number | null {
+  if (!ts) return null;
+  const t = Date.parse(ts);
+  return Number.isFinite(t) ? t : null;
+}
+
+function upperMode(x: any): string | null {
+  if (typeof x !== "string") return null;
+  const u = x.toUpperCase();
+  return ["WORK", "DEFENSE", "NIGHT", "DEMO", "SILENT"].includes(u) ? u : null;
+}
+
+function isModeTrace(events: TelemetryEvent[]): boolean {
+  const types = new Set(events.map((e) => e.type));
+  const hasRequested = types.has("MODE.SET_REQUESTED");
+  const hasDecision = types.has("MODE.SET_ACCEPTED") || types.has("MODE.SET_REJECTED");
+  return hasRequested && hasDecision;
+}
+
+function summarizeModeTrace(traceId: string, traceEvents: TelemetryEvent[]): SignalEvent | null {
+  const sorted = [...traceEvents].sort((a, b) => (a.meta?.seq ?? 0) - (b.meta?.seq ?? 0));
+
+  const firstSeq = sorted[0]?.meta?.seq ?? 0;
+  const lastSeq = sorted[sorted.length - 1]?.meta?.seq ?? firstSeq;
+
+  const times = sorted
+    .map((e) => safeParseIso(e.meta?.ts))
+    .filter((t): t is number => typeof t === "number");
+
+  const t0 = times.length ? Math.min(...times) : null;
+  const t1 = times.length ? Math.max(...times) : null;
+  const latencyMs = t0 !== null && t1 !== null ? Math.max(0, t1 - t0) : null;
+
+  const eReq = sorted.find((e) => e.type === "MODE.SET_REQUESTED");
+  const eAcc = sorted.find((e) => e.type === "MODE.SET_ACCEPTED");
+  const eRej = sorted.find((e) => e.type === "MODE.SET_REJECTED");
+  const eChg = [...sorted].reverse().find((e) => e.type === "MODE.CHANGED");
+
+  const requestedMode =
+    upperMode(eReq?.payload?.requestedMode) ??
+    upperMode(eReq?.payload?.mode) ??
+    upperMode(sorted.find((e) => e.type === "COMMAND.INTENT")?.payload?.intent?.mode) ??
+    null;
+
+  const toMode =
+    upperMode(eChg?.payload?.mode) ??
+    upperMode(eChg?.payload?.currentMode) ??
+    upperMode(eChg?.payload?.to) ??
+    requestedMode ??
+    "UNKNOWN";
+
+  const fromMode =
+    upperMode(eChg?.payload?.prevMode) ??
+    upperMode(eChg?.payload?.from) ??
+    upperMode(eChg?.payload?.previousMode) ??
+    "UNKNOWN";
+
+  const accepted = Boolean(eAcc);
+  const rejected = Boolean(eRej);
+  const resultLabel = accepted ? "Accepted" : rejected ? "Rejected" : "Unknown";
+
+  const reasonCode = eRej?.payload?.reasonCode ?? eRej?.payload?.code ?? null;
+  const reason = eRej?.payload?.reason ?? eRej?.payload?.message ?? null;
+
+  const level: SignalLevel = rejected ? "ERROR" : "INFO";
+
+  const latencyLabel = latencyMs !== null ? `~${latencyMs}ms` : "~—";
+  const baseMsg = `${fromMode} → ${toMode} • ${resultLabel} • ${latencyLabel}`;
+  const rejMsg =
+    rejected && (reasonCode || reason)
+      ? `${baseMsg} • ${String(reasonCode ?? "REJECTED")}`
+      : baseMsg;
+
+  const ts = sorted[sorted.length - 1]?.meta?.ts ?? new Date().toISOString();
+
+  return {
+    seq: lastSeq,
+    ts,
+    traceId,
+    level,
+    type: "MODE.CARD",
+    msg: rejMsg,
+  };
+}
+
+function toSignalsWithModeCards(events: TelemetryEvent[]): SignalEvent[] {
+  const byTrace = new Map<string, TelemetryEvent[]>();
+  for (const e of events) {
+    const traceId = e.meta?.traceId ?? "trace_unknown";
+    const arr = byTrace.get(traceId) ?? [];
+    arr.push(e);
+    byTrace.set(traceId, arr);
+  }
+
+  const modeTraceIds = new Set<string>();
+  for (const [tid, arr] of byTrace.entries()) {
+    if (tid !== "trace_unknown" && isModeTrace(arr)) modeTraceIds.add(tid);
+  }
+
+  const cards: SignalEvent[] = [];
+  const raws: SignalEvent[] = [];
+
+  for (const [tid, arr] of byTrace.entries()) {
+    if (modeTraceIds.has(tid)) {
+      const card = summarizeModeTrace(tid, arr);
+      if (card) cards.push(card);
+      continue;
+    }
+
+    for (const e of arr) {
       const seq = e.meta?.seq ?? 0;
       const ts = e.meta?.ts ?? new Date().toISOString();
       const traceId = e.meta?.traceId ?? "trace_unknown";
       const level = severityToLevel(e.meta?.severity);
+
       const msg =
         e.type === "ALERT.RAISED"
           ? `${e.payload?.severity ?? "WARN"}: ${e.payload?.title ?? "Alert"}`
           : e.type === "ALERT.CLEARED"
-          ? `Alert cleared: ${e.payload?.reason ?? "UNKNOWN"}`
-          : e.type === "SERVICE.HEARTBEAT"
-          ? `Heartbeat: ${e.payload?.service ?? "service"}`
-          : e.type === "SERVICE.READINESS"
-          ? `Readiness: ${e.payload?.service ?? "service"} = ${String(e.payload?.ready)}`
-          : e.type;
+            ? `Alert cleared: ${e.payload?.reason ?? "UNKNOWN"}`
+            : e.type === "SERVICE.HEARTBEAT"
+              ? `Heartbeat: ${e.payload?.service ?? "service"}`
+              : e.type === "SERVICE.READINESS"
+                ? `Readiness: ${e.payload?.service ?? "service"} = ${String(e.payload?.ready)}`
+                : e.type;
 
-      return { seq, ts, traceId, level, type: e.type, msg };
-    })
-    .sort((a, b) => a.seq - b.seq);
+      raws.push({ seq, ts, traceId, level, type: e.type, msg });
+    }
+  }
 
-  // Keep last 200 signals
-  return mapped.slice(-200);
+  const combined = [...raws, ...cards].sort((a, b) => a.seq - b.seq);
+  return combined.slice(-200);
 }
 
 export default function HomePage() {
@@ -157,10 +281,9 @@ export default function HomePage() {
         const data = (await r.json()) as TelemetryEvent[];
 
         if (!alive) return;
-        // guarantee stable ordering
         setEvents(data.sort((a, b) => (a.meta?.seq ?? 0) - (b.meta?.seq ?? 0)));
       } catch {
-        // keep last known; UI stays up even if backend flaps
+        // Keep last known; UI stays up even if backend flaps
       }
     }
 
@@ -220,18 +343,30 @@ export default function HomePage() {
     };
   }, []);
 
-  const theme = alerts.length > 0 ? "alert" : "base";
-
   const snap = useMemo(() => {
     const mode = pickMode(events, alerts);
-    const signals = toSignals(events);
+
+    // Canonical danger rule:
+    // danger = DEFENSE OR alerts.some(ERROR/CRITICAL)
+    const danger =
+      mode === "DEFENSE" ||
+      alerts.some((a) => a.severity === "ERROR" || a.severity === "CRITICAL");
+
+    const theme = danger ? "alert" : "base";
+    const signals = toSignalsWithModeCards(events);
+
     const healthBadges = buildHealthBadges(
       health ?? { ok: false, services: [{ service: "telemetry", status: "offline" }] },
       "http://localhost:8790"
     );
 
     return { mode, theme, health: healthBadges, signals };
-  }, [events, alerts, health, theme]);
+  }, [events, alerts, health]);
+
+  // Sync global theme to <html data-theme="...">
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", snap.theme);
+  }, [snap.theme]);
 
   return (
     <div className="space-y-4">
