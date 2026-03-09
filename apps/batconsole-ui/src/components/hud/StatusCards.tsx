@@ -1,10 +1,18 @@
 "use client";
 
-import type { HealthBadge } from "@/lib/telemetry/mock";
+type HealthBadge = {
+  key: "BUS" | "TELEMETRY" | "ALFRED" | "ADAPTERS";
+  status: "OK" | "WARN" | "DOWN";
+  detail?: string;
+};
 
 function chip(status: HealthBadge["status"]) {
-  if (status === "OK") return "bg-emerald-500/10 text-emerald-200 border-emerald-500/30";
-  if (status === "WARN") return "bg-amber-500/10 text-amber-200 border-amber-500/30";
+  if (status === "OK") {
+    return "bg-emerald-500/10 text-emerald-200 border-emerald-500/30";
+  }
+  if (status === "WARN") {
+    return "bg-amber-500/10 text-amber-200 border-amber-500/30";
+  }
   return "bg-red-500/10 text-red-200 border-red-500/30";
 }
 
@@ -22,6 +30,7 @@ export default function StatusCards({ health }: { health: HealthBadge[] }) {
               {h.status}
             </div>
           </div>
+
           <div className="mt-2 text-xs text-neutral-500 break-words">
             {h.detail ?? "—"}
           </div>

@@ -104,23 +104,92 @@ function pickMode(events: TelemetryEvent[], alerts: AlertsResponse["alerts"]): B
   return "WORK";
 }
 
-function buildHealthBadges(health: HealthResponse, telemUrlLabel: string): HealthBadge[] {
-  const telemSvc = health.services?.find((s) => s.service === "telemetry");
-  const telemStatus: HealthBadge["status"] =
-    !telemSvc
-      ? "DOWN"
-      : telemSvc.status === "healthy"
-        ? "OK"
-        : telemSvc.status === "degraded" || telemSvc.status === "stale"
-          ? "WARN"
-          : "DOWN";
+function formatStaleForMs(ms?: number): string | null {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return null;
 
-  // Phase 1 placeholders (Phase 1.2 will make these fully truthful)
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `${sec}s ago`;
+
+  const min = Math.floor(sec / 60);
+  const remSec = sec % 60;
+  if (min < 60) return remSec > 0 ? `${min}m ${remSec}s ago` : `${min}m ago`;
+
+  const hr = Math.floor(min / 60);
+  const remMin = min % 60;
+  return remMin > 0 ? `${hr}h ${remMin}m ago` : `${hr}h ago`;
+}
+
+
+function buildHealthBadges(health: HealthResponse, telemUrlLabel: string): HealthBadge[] {
+  const services = health.services ?? [];
+
+  const telemetrySvc = services.find((s) => s.service === "telemetry");
+  const busSvc = services.find((s) => s.service === "gotham-bus" || s.service === "bus");
+  const alfredSvc = services.find((s) => s.service === "alfred");
+  const adapterSvcs = services.filter(
+    (s) =>
+      s.service !== "telemetry" &&
+      s.service !== "gotham-bus" &&
+      s.service !== "bus" &&
+      s.service !== "alfred"
+  );
+
+  function toBadgeStatus(
+    svc?: HealthResponse["services"][number]
+  ): HealthBadge["status"] {
+    if (!svc) return "DOWN";
+    if (svc.status === "healthy") return "OK";
+    if (svc.status === "degraded" || svc.status === "stale") return "WARN";
+    return "DOWN";
+  }
+
+  function serviceDetail(
+    svc: HealthResponse["services"][number] | undefined,
+    fallback: string
+  ): string {
+    if (!svc) return fallback;
+
+    const freshness = formatStaleForMs(svc.staleForMs);
+    const readyText =
+      typeof svc.ready === "boolean" ? `ready=${svc.ready}` : "ready=unknown";
+
+    return [
+      svc.status,
+      readyText,
+      freshness ? `last seen ${freshness}` : null,
+      svc.readinessReason && svc.readinessReason !== "OK"
+        ? `reason=${svc.readinessReason}`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(" • ");
+  }
+
+  const adapterCount = adapterSvcs.length;
+
   return [
-    { key: "BUS", status: "WARN", detail: "in-process" },
-    { key: "TELEMETRY", status: telemStatus, detail: telemUrlLabel },
-    { key: "ALFRED", status: "WARN", detail: "in-process" },
-    { key: "ADAPTERS", status: "OK", detail: "none" },
+    {
+      key: "BUS",
+      status: toBadgeStatus(busSvc),
+      detail: serviceDetail(busSvc, "not reported yet"),
+    },
+    {
+      key: "TELEMETRY",
+      status: toBadgeStatus(telemetrySvc),
+      detail: telemetrySvc
+        ? `${serviceDetail(telemetrySvc, telemUrlLabel)} • ${telemUrlLabel}`
+        : `offline • ${telemUrlLabel}`,
+    },
+    {
+      key: "ALFRED",
+      status: toBadgeStatus(alfredSvc),
+      detail: serviceDetail(alfredSvc, "not reported yet"),
+    },
+    {
+      key: "ADAPTERS",
+      status: adapterCount > 0 ? "OK" : "WARN",
+      detail: adapterCount > 0 ? `${adapterCount} connected` : "0 connected",
+    },
   ];
 }
 
