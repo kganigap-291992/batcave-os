@@ -278,7 +278,14 @@ function summarizeModeTrace(traceId: string, traceEvents: TelemetryEvent[]): Sig
   };
 }
 
-function toSignalsWithModeCards(events: TelemetryEvent[]): SignalEvent[] {
+function toSignalsWithModeCards(
+  events: TelemetryEvent[],
+  opts?: { includeHeartbeats?: boolean; includeReadiness?: boolean }
+): SignalEvent[] {
+
+  const includeHeartbeats = opts?.includeHeartbeats ?? false;
+  const includeReadiness = opts?.includeReadiness ?? true;
+
   const byTrace = new Map<string, TelemetryEvent[]>();
   for (const e of events) {
     const traceId = e.meta?.traceId ?? "trace_unknown";
@@ -303,6 +310,10 @@ function toSignalsWithModeCards(events: TelemetryEvent[]): SignalEvent[] {
     }
 
     for (const e of arr) {
+
+      if (!includeHeartbeats && e.type === "SERVICE.HEARTBEAT") continue;
+      if (!includeReadiness && e.type === "SERVICE.READINESS") continue;
+
       const seq = e.meta?.seq ?? 0;
       const ts = e.meta?.ts ?? new Date().toISOString();
       const traceId = e.meta?.traceId ?? "trace_unknown";
@@ -422,7 +433,10 @@ export default function HomePage() {
       alerts.some((a) => a.severity === "ERROR" || a.severity === "CRITICAL");
 
     const theme = danger ? "alert" : "base";
-    const signals = toSignalsWithModeCards(events);
+    const signals = toSignalsWithModeCards(events, {
+      includeHeartbeats: false,
+      includeReadiness: true
+    });
 
     const healthBadges = buildHealthBadges(
       health ?? { ok: false, services: [{ service: "telemetry", status: "offline" }] },
